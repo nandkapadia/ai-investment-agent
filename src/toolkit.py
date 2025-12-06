@@ -23,6 +23,8 @@ from src.enhanced_sentiment_toolkit import get_multilingual_sentiment_search
 from src.liquidity_calculation_tool import calculate_liquidity_metrics
 from src.stocktwits_api import StockTwitsAPI
 from src.data.fetcher import fetcher as market_data_fetcher
+from src.data.moneycontrol_fetcher import get_moneycontrol_fetcher
+from src.data.screener_in_fetcher import get_screener_in_fetcher
 
 logger = structlog.get_logger(__name__)
 stocktwits_api = StockTwitsAPI()
@@ -385,6 +387,235 @@ async def get_fundamental_analysis(ticker: Annotated[str, "Stock ticker symbol"]
     except Exception as e:
         return f"Error searching for fundamentals: {e}"
 
+
+# ===================================================================
+# INDIAN MARKET SPECIFIC TOOLS
+# ===================================================================
+
+@tool
+async def get_indian_analyst_consensus(ticker: Annotated[str, "Stock ticker symbol"]) -> str:
+    """
+    Get analyst recommendations and price targets from Indian sources.
+
+    Specifically designed for Indian stocks (.NS/.BO tickers).
+    Aggregates data from Moneycontrol.com including:
+    - Buy/Hold/Sell recommendations
+    - Price targets (min/max/average)
+    - Analyst count and consensus
+
+    Args:
+        ticker: Stock ticker (e.g., 'RELIANCE.NS', 'TCS.BO')
+
+    Returns:
+        Formatted string with analyst consensus data
+    """
+    logger.info("get_indian_analyst_consensus_called", ticker=ticker)
+
+    try:
+        mc_fetcher = get_moneycontrol_fetcher()
+        consensus = await mc_fetcher.get_analyst_consensus(ticker)
+
+        if not consensus or consensus.get('analysts_count', 0) == 0:
+            return f"""Indian Analyst Consensus for {ticker}:
+Status: No analyst coverage found
+
+This stock may not have significant coverage from Indian brokerages.
+Consider using fundamental analysis instead."""
+
+        # Format the output
+        result = f"""Indian Analyst Consensus for {ticker}:
+
+RECOMMENDATIONS:
+- Buy: {consensus['buy_count']} analysts
+- Hold: {consensus['hold_count']} analysts
+- Sell: {consensus['sell_count']} analysts
+- **Consensus: {consensus['consensus']}**
+
+PRICE TARGETS:"""
+
+        if consensus.get('price_target_avg'):
+            result += f"\n- Average Target: ₹{consensus['price_target_avg']:,.0f}"
+
+        if consensus.get('price_target_min') and consensus.get('price_target_max'):
+            result += f"\n- Target Range: ₹{consensus['price_target_min']:,.0f} - ₹{consensus['price_target_max']:,.0f}"
+
+        result += f"\n\nTotal Analysts Covering: {consensus['analysts_count']}"
+
+        if consensus.get('last_updated'):
+            result += f"\nLast Updated: {consensus['last_updated']}"
+
+        result += "\n\nSource: Moneycontrol.com"
+
+        logger.info("indian_analyst_consensus_fetched",
+                   ticker=ticker,
+                   consensus=consensus['consensus'],
+                   analysts=consensus['analysts_count'])
+
+        return result
+
+    except Exception as e:
+        logger.error("indian_analyst_consensus_error", ticker=ticker, error=str(e), exc_info=True)
+        return f"Error fetching Indian analyst consensus for {ticker}: {str(e)}"
+
+
+@tool
+async def get_indian_financial_history(ticker: Annotated[str, "Stock ticker symbol"]) -> str:
+    """
+    Get 10-year financial history for Indian stocks.
+
+    Fetches comprehensive historical data from Screener.in including:
+    - Revenue trends (10 years)
+    - Profit trends
+    - ROE (Return on Equity) history
+    - Debt/Equity ratio trends
+
+    Args:
+        ticker: Stock ticker (e.g., 'RELIANCE.NS')
+
+    Returns:
+        Formatted string with financial history
+    """
+    logger.info("get_indian_financial_history_called", ticker=ticker)
+
+    try:
+        screener_fetcher = get_screener_in_fetcher()
+        financials = await screener_fetcher.get_financial_history(ticker)
+
+        if not financials or not financials.get('years'):
+            return f"""Financial History for {ticker}:
+Status: No historical data found
+
+Unable to retrieve financial history from Screener.in.
+The stock may not be listed or data may be unavailable."""
+
+        result = f"""10-Year Financial History for {ticker}:
+
+YEARS COVERED: {', '.join(financials['years'][-5:])}... ({len(financials['years'])} years total)
+
+"""
+
+        # Revenue trend
+        if financials.get('revenue_history'):
+            rev_list = financials['revenue_history']
+            if len(rev_list) >= 2:
+                latest = rev_list[-1] if rev_list[-1] else 0
+                oldest = rev_list[0] if rev_list[0] else 0
+                cagr = ((latest / oldest) ** (1 / len(rev_list)) - 1) * 100 if oldest > 0 else 0
+                result += f"REVENUE TREND:\n- Latest: ₹{latest/10_000_000:.1f} Cr\n- CAGR: {cagr:.1f}%\n\n"
+
+        # Profit trend
+        if financials.get('profit_history'):
+            profit_list = financials['profit_history']
+            if len(profit_list) >= 2:
+                latest = profit_list[-1] if profit_list[-1] else 0
+                result += f"PROFIT TREND:\n- Latest: ₹{latest/10_000_000:.1f} Cr\n\n"
+
+        # ROE trend
+        if financials.get('roe_history'):
+            roe_list = financials['roe_history']
+            if roe_list:
+                avg_roe = sum(r for r in roe_list if r) / len([r for r in roe_list if r])
+                latest_roe = roe_list[-1] if roe_list[-1] else 0
+                result += f"ROE TREND:\n- Latest: {latest_roe:.1f}%\n- Average: {avg_roe:.1f}%\n\n"
+
+        # Debt/Equity trend
+        if financials.get('debt_to_equity_history'):
+            de_list = financials['debt_to_equity_history']
+            if de_list:
+                latest_de = de_list[-1] if de_list[-1] else 0
+                result += f"LEVERAGE TREND:\n- Latest D/E: {latest_de:.2f}\n\n"
+
+        result += "Source: Screener.in"
+
+        logger.info("indian_financial_history_fetched",
+                   ticker=ticker, years=len(financials['years']))
+
+        return result
+
+    except Exception as e:
+        logger.error("indian_financial_history_error", ticker=ticker, error=str(e), exc_info=True)
+        return f"Error fetching Indian financial history for {ticker}: {str(e)}"
+
+
+@tool
+async def get_latest_concall_summary(ticker: Annotated[str, "Stock ticker symbol"]) -> str:
+    """
+    Get summary of latest conference call for Indian stocks.
+
+    Extracts and summarizes quarterly conference call transcripts from Screener.in:
+    - Quarter and date
+    - Key participants (CEO, CFO, etc.)
+    - Management guidance
+    - Key discussion points
+
+    Args:
+        ticker: Stock ticker (e.g., 'RELIANCE.NS')
+
+    Returns:
+        Formatted string with concall summary
+    """
+    logger.info("get_latest_concall_summary_called", ticker=ticker)
+
+    try:
+        screener_fetcher = get_screener_in_fetcher()
+        concall = await screener_fetcher.get_latest_concall(ticker)
+
+        if not concall or not concall.get('transcript'):
+            return f"""Conference Call Summary for {ticker}:
+Status: No conference call transcript found
+
+No recent concall transcript available for this stock on Screener.in."""
+
+        result = f"""Latest Conference Call Summary - {ticker}:
+
+"""
+
+        if concall.get('quarter'):
+            result += f"Quarter: {concall['quarter']}\n"
+
+        if concall.get('date'):
+            result += f"Date: {concall['date']}\n"
+
+        result += "\n"
+
+        # Participants
+        if concall.get('participants'):
+            result += "KEY PARTICIPANTS:\n"
+            for participant in concall['participants'][:5]:  # Top 5
+                result += f"- {participant}\n"
+            result += "\n"
+
+        # Management guidance
+        if concall.get('management_guidance'):
+            result += "MANAGEMENT GUIDANCE:\n"
+            for key, value in concall['management_guidance'].items():
+                result += f"- {key.replace('_', ' ').title()}: {value}\n"
+            result += "\n"
+
+        # Key points
+        if concall.get('key_points'):
+            result += "KEY DISCUSSION POINTS:\n"
+            for i, point in enumerate(concall['key_points'][:5], 1):  # Top 5
+                result += f"{i}. {point}\n"
+            result += "\n"
+
+        # Transcript preview
+        if concall.get('transcript'):
+            transcript_preview = concall['transcript'][:500]
+            result += f"TRANSCRIPT PREVIEW:\n{transcript_preview}...\n\n"
+
+        result += "Source: Screener.in\n\nNote: For full analysis, consider management's tone and specific financial targets mentioned."
+
+        logger.info("concall_summary_fetched",
+                   ticker=ticker, quarter=concall.get('quarter'))
+
+        return result
+
+    except Exception as e:
+        logger.error("concall_summary_error", ticker=ticker, error=str(e), exc_info=True)
+        return f"Error fetching conference call summary for {ticker}: {str(e)}"
+
+
 class Toolkit:
     def __init__(self):
         self.market_data_fetcher = market_data_fetcher
@@ -397,19 +628,34 @@ class Toolkit:
         calculate_liquidity_metrics
     ]
     
-    def get_fundamental_tools(self): return [get_financial_metrics, get_news, get_fundamental_analysis] 
+    def get_fundamental_tools(self): return [
+        get_financial_metrics,
+        get_news,
+        get_fundamental_analysis,
+        get_indian_analyst_consensus,
+        get_indian_financial_history,
+        get_latest_concall_summary
+    ]
     def get_sentiment_tools(self): return [get_social_media_sentiment, get_multilingual_sentiment_search]
     def get_news_tools(self): return [get_news, get_macroeconomic_news]
+    def get_indian_tools(self): return [
+        get_indian_analyst_consensus,
+        get_indian_financial_history,
+        get_latest_concall_summary
+    ]
     def get_all_tools(self): return [
-        get_yfinance_data, 
-        get_technical_indicators, 
-        get_financial_metrics, 
-        get_news, 
-        get_social_media_sentiment, 
-        get_multilingual_sentiment_search, 
-        calculate_liquidity_metrics, 
-        get_macroeconomic_news, 
-        get_fundamental_analysis
+        get_yfinance_data,
+        get_technical_indicators,
+        get_financial_metrics,
+        get_news,
+        get_social_media_sentiment,
+        get_multilingual_sentiment_search,
+        calculate_liquidity_metrics,
+        get_macroeconomic_news,
+        get_fundamental_analysis,
+        get_indian_analyst_consensus,
+        get_indian_financial_history,
+        get_latest_concall_summary
     ]
 
 toolkit = Toolkit()
