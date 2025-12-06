@@ -134,8 +134,17 @@ Avg Daily Turnover (USD): N/A
 
         avg_turnover_usd = avg_turnover_local * fx_rate
 
-        # Threshold: $500k USD daily turnover is a reasonable floor
-        threshold_usd = 500_000
+        # Threshold adjusted for Indian market conditions
+        # Indian small/mid caps have lower liquidity than US counterparts
+        # $150k is more appropriate for emerging markets like India
+        # while $500k was calibrated for US/developed markets
+        if suffix in ['NS', 'BO']:  # Indian exchanges (NSE, BSE)
+            threshold_usd = 150_000  # $150k for Indian stocks
+            threshold_label = "$150,000 USD daily (Indian market threshold)"
+        else:
+            threshold_usd = 500_000  # $500k for other markets
+            threshold_label = "$500,000 USD daily"
+
         status = "PASS" if avg_turnover_usd > threshold_usd else "FAIL"
 
         return f"""Liquidity Analysis for {ticker}:
@@ -143,7 +152,7 @@ Status: {status}
 Avg Daily Volume (3mo): {int(avg_volume):,}
 Avg Daily Turnover (USD): ${int(avg_turnover_usd):,}
 Details: {currency} turnover converted at FX rate {fx_rate}
-Threshold: $500,000 USD daily
+Threshold: {threshold_label}
 """
 
     except Exception as e:

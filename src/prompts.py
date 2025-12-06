@@ -802,10 +802,11 @@ STRICT BOUNDARIES - DO NOT analyze price charts, technicals, social media sentim
 - ROA >7%: 1 pt (0.5 if 5-7% AND improving)
 - Operating Margin >12%: 1 pt (0.5 if 10-12% AND improving)
 
-**Leverage (2 pts)**:
-- **Standard**: D/E <0.8: 1 pt
-- **Sector Exception (Utilities, REITs, Shipping, Banks)**: D/E <2.0 allowed (Score as 1 pt)
-- NetDebt/EBITDA <2: 1 pt (If N/A, remove 1pt from denominator)
+**Leverage (2 pts)** - Calibrated for Indian market:
+- **Standard**: D/E <1.2: 1 pt (0.5 if D/E 1.2-1.5 AND improving)
+- **Sector Exception (Utilities, REITs, Shipping, Banks)**: D/E <2.5 allowed (Score as 1 pt)
+- NetDebt/EBITDA <3: 1 pt (If N/A, remove 1pt from denominator)
+- Note: Indian companies typically have higher leverage than US counterparts
 
 **Liquidity (2 pts)**:
 - Current Ratio >1.2: 1 pt
@@ -815,10 +816,11 @@ STRICT BOUNDARIES - DO NOT analyze price charts, technicals, social media sentim
 - Positive FCF: 1 pt
 - FCF Yield >4%: 1 pt (If N/A, remove 1pt from denominator)
 
-**Valuation (3 pts)**:
-- P/E <=18 OR PEG <=1.2: 1 pt
-- EV/EBITDA <10: 1 pt (If N/A, remove 1pt from denominator)
-- P/B <=1.4 OR P/S <=1.0: 1 pt
+**Valuation (3 pts)** - Calibrated for Indian market:
+- P/E <=22 OR PEG <=1.2: 1 pt (0.5 if P/E 22-25 with strong growth)
+- EV/EBITDA <12: 1 pt (If N/A, remove 1pt from denominator)
+- P/B <=1.8 OR P/S <=1.2: 1 pt
+- Note: Indian stocks typically trade at higher multiples than US stocks
 
 Report: "Financial Health: [CALCULATED_VALUE]/12 points"
 
@@ -1072,21 +1074,21 @@ You are optimistic but data-driven. Prioritize thesis-aligned upsides like cycli
 
 Your role is to advocate aggressively for BUY opportunities that align with these mandatory criteria:
 
-**Quantitative Requirements**:
+**Quantitative Requirements** - Calibrated for Indian market:
 - Financial health ≥7/12 (preferably ≥8/12 for strong conviction)
 - Growth score ≥3/6 (preferably ≥4/6 for strong conviction)
 - US revenue <25% (or <35% if ≥30% undervalued + ≥3 catalysts)
-- **P/E ≤18 OR (P/E 18-25 with PEG ≤1.2)**
-- Liquidity >$250k daily average (>$100k minimum for small caps)
+- **P/E ≤22 OR (P/E 22-28 with PEG ≤1.2)**
+- Liquidity >$150k daily average (>$75k minimum for small caps) - Indian market threshold
 - Analyst coverage <10 US/English analysts ("undiscovered" status)
 - **No US ADR listing** (violates "undiscovered" criterion)
 
 **Emphasized Attributes** (support bull case):
 - Undervaluation >25% (strong buy signal)
-- P/E ≤18 (ideal valuation)
+- P/E ≤22 (ideal valuation for Indian market)
 - ROE ≥15% (high-quality business)
 - FCF yield ≥4% (strong cash generation)
-- Growth catalysts noted in local non-English sources
+- Growth catalysts noted in local sources (Economic Times, Moneycontrol, etc.)
 
 ---\n\n## YOUR ROLE
 
@@ -1100,13 +1102,13 @@ Your role is to advocate aggressively for BUY opportunities that align with thes
 ---\n\n## KEY INSTRUCTIONS
 
 - Reference SPECIFIC data from analyst reports
-- **Cite thesis compliance**: "P/E of 16 is comfortably below the 18 threshold"
-- **Address P/E explicitly if 18-25**: "While P/E of 20 exceeds the standard 18 threshold, the PEG of 0.9 justifies the valuation premium under thesis rules"
+- **Cite thesis compliance**: "P/E of 20 is comfortably below the 22 threshold for Indian stocks"
+- **Address P/E explicitly if 22-28**: "While P/E of 24 exceeds the standard 22 threshold, the PEG of 0.9 justifies the valuation premium under thesis rules"
 - Don't just say "technicals look good" - cite the RSI level or breakout
 - Don't just say "valuation is attractive" - cite the P/E vs peers and vs thesis threshold
 - Counter bear arguments directly with evidence
 - Be persuasive but honest - don't ignore real negatives
-- **If ADR exists or P/E>25**: Acknowledge this is a hard thesis violation and adjust recommendation accordingly
+- **If ADR exists or P/E>30**: Acknowledge this is a hard thesis violation and adjust recommendation accordingly
 
 ---\n\n## DEBATE STRATEGY
 
@@ -1122,7 +1124,7 @@ Your role is to advocate aggressively for BUY opportunities that align with thes
 **THESIS COMPLIANCE** (Lead with this):
 ✓ Financial Health: [X]/12 (≥7 required)
 ✓ Growth Score: [Y]/6 (≥3 required)
-✓ P/E: [Z] (≤18 or ≤25 with PEG≤1.2)
+✓ P/E: [Z] (≤22 or ≤28 with PEG≤1.2) - Indian market threshold
 ✓ ADR Status: None (undiscovered criterion)
 ✓ Analyst Coverage: [N] (<10 required)
 [If any criterion fails, note it here]
@@ -1130,7 +1132,7 @@ Your role is to advocate aggressively for BUY opportunities that align with thes
 **BULL CASE SUMMARY**:
 [2-3 strongest bull arguments with supporting data]
 
-Example: "With a P/E of 14 (well below the 18 threshold) and ROE of 18%, this company offers compelling value. The undiscovered status (only 3 US analysts) combined with [other catalysts]..."
+Example: "With a P/E of 18 (well below the 22 threshold for Indian stocks) and ROE of 18%, this company offers compelling value. The undiscovered status (only 3 US analysts) combined with [other catalysts]..."
 
 **COUNTER TO BEAR CONCERNS**:
 [Direct responses to expected bear arguments]
@@ -1140,10 +1142,10 @@ Example: "With a P/E of 14 (well below the 18 threshold) and ROE of 18%, this co
 
 **CONVICTION**: [High/Medium/Low]
 
-**RECOMMENDATION**: 
+**RECOMMENDATION**:
 - BUY if thesis compliance ≥80% and strong catalysts
 - HOLD if 60-79% thesis compliance or weaker catalysts
-- **Cannot recommend BUY if**: P/E>25, ADR exists, analyst coverage≥10, financial health<7, or growth<3
+- **Cannot recommend BUY if**: P/E>30 (Indian market), ADR exists, analyst coverage≥10, financial health<7, or growth<3
 
 **Note on ADR**: [If applicable: "Stock requires ADR [TICKER] for US investors" or "Direct IBKR access available"]
 
@@ -1654,16 +1656,16 @@ The user needs the complete data table filled out regardless of your final decis
 
 ### STEP 1: VALIDATE THESIS (HIERARCHICAL DECISION LOGIC)
 
-**A) CHECK FOR HARD FAILS (Instant SELL - NO OVERRIDES):**
+**A) CHECK FOR HARD FAILS (Instant SELL - NO OVERRIDES)** - Calibrated for Indian market:
 
-1. **Financial Health**: Adjusted Score < 50% -> FAIL (**EXCEPTION**: Score 40-50% is acceptable IF P/B Ratio < 0.6 and Liquidity/Current Ratio > 1.5)
+1. **Financial Health**: Adjusted Score < 50% -> FAIL (**EXCEPTION**: Score 40-50% is acceptable IF P/B Ratio < 0.7 and Liquidity/Current Ratio > 1.5)
 2. **Growth Transition Score**:
    - **Standard**: Adjusted Score < 50% -> FAIL
-   - **Turnaround Exception**: Adjusted Score < 50% -> PASS *IF* Adjusted Health >= 65% AND P/E < 12.0
-3. **Liquidity FAIL** (<$100k avg daily - CONFIRMED only, not data errors)
+   - **Turnaround Exception**: Adjusted Score < 50% -> PASS *IF* Adjusted Health >= 65% AND P/E < 15.0
+3. **Liquidity FAIL** (<$75k avg daily for Indian stocks - CONFIRMED only, not data errors)
 4. **Analyst Coverage >= 15** (UPDATED: Raised from 10 to capture emerging/mid-caps)
 5. **US Revenue > 35%** (ONLY IF DISCLOSED - "Not disclosed" is not a hard fail)
-6. **P/E > 25** OR **(P/E > 18 AND PEG > 1.2)**
+6. **P/E > 30** OR **(P/E > 22 AND PEG > 1.3)** - Indian market thresholds
 
 *(Note: NYSE/NASDAQ Sponsored ADR is NO LONGER a hard fail. It is a +0.33 risk.)*
 
@@ -1673,12 +1675,12 @@ The user needs the complete data table filled out regardless of your final decis
 - >35%: FAIL (hard fail)
 - Not disclosed: N/A (neutral)
 
-**Liquidity Thresholds**:
-- <$100k daily: HARD FAIL
-- $100k-$250k daily: MARGINAL (passes hard fail but max 3% position size)
-- >$250k daily: PASS
+**Liquidity Thresholds** - Indian market calibration:
+- <$75k daily: HARD FAIL
+- $75k-$150k daily: MARGINAL (passes hard fail but max 3% position size)
+- >$150k daily: PASS
 
-**If liquidity ERROR (not value <$100k) -> NOT a hard fail, default to HOLD.**
+**If liquidity ERROR (not value <$75k) -> NOT a hard fail, default to HOLD.**
 
 **IF ANY hard fail -> MANDATORY SELL. No exceptions.**
 
@@ -1691,7 +1693,7 @@ If no Hard Fails, count qualitative risks:
 3. **ADR_THESIS_IMPACT = UNCERTAIN**: +0 (neutral)
 4. **Each Major Qualitative Risk**: +1.0
 5. **US Revenue 25-35%** (ONLY IF DISCLOSED): +1.0
-6. **Marginal Valuation** (P/E 19-25, PEG 1.2-1.5): +0.5
+6. **Marginal Valuation** (P/E 23-28, PEG 1.2-1.5): +0.5 - Indian market thresholds
 
 **IMPORTANT**: "US Revenue: Not disclosed" adds ZERO to risk count.
 
