@@ -80,6 +80,35 @@ SOURCE_QUALITY = {
     'proxy': 2                      # Estimates
 }
 
+# Indian market source quality (FMP promoted to primary)
+# FMP has direct BSE/NSE data, more reliable than yfinance scraping for Indian stocks
+SOURCE_QUALITY_INDIAN = {
+    'fmp': 10,                      # PRIMARY for Indian stocks (direct BSE/NSE data)
+    'fmp_info': 10,                 # FMP info also promoted
+    'yfinance_statements': 9.5,     # Still high quality from filings
+    'calculated_from_statements': 9.5,
+    'eodhd': 9,                     # Backup for Indian stocks
+    'yfinance': 7,                  # Demoted (scraping less reliable)
+    'yfinance_info': 7,
+    'calculated': 8,                # Derived metrics
+    'yahooquery': 6,                # Scraped backup
+    'yahooquery_info': 6,
+    'tavily_extraction': 4,         # Web NLP extraction
+    'proxy': 2                      # Estimates
+}
+
+def is_indian_stock(ticker: str) -> bool:
+    """
+    Detect if ticker is from Indian exchanges (NSE/BSE).
+
+    Args:
+        ticker: Stock ticker symbol
+
+    Returns:
+        True if ticker ends with .NS (NSE) or .BO (BSE)
+    """
+    return ticker.endswith('.NS') or ticker.endswith('.BO')
+
 MergeResult = namedtuple('MergeResult', ['data', 'gaps_filled'])
 
 
@@ -565,51 +594,59 @@ class SmartMarketDataFetcher:
         
         return results
 
-    def _smart_merge_with_quality(self, source_results: Dict[str, Optional[Dict]], symbol: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    def _smart_merge_with_quality(self, source_results: Dict[str, Optional[Dict]], symbol: str, source_quality: Dict[str, float] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
         PHASE 3: Intelligent merge with quality scoring.
         Updated to include EODHD in the priority logic and field-specific override checks.
+
+        Args:
+            source_results: Dictionary of source name to fetched data
+            symbol: Stock ticker symbol
+            source_quality: Optional custom quality map (defaults to SOURCE_QUALITY)
         """
+        # Use provided quality map or default
+        quality_map = source_quality or SOURCE_QUALITY
+
         merged = {}
         field_sources = {}
         field_quality = {}
         sources_used = set()
         gaps_filled = 0
-        
+
         # Order of processing (lowest priority to highest priority if quality scores match)
-        # Note: Actual precedence is determined by SOURCE_QUALITY dict
+        # Note: Actual precedence is determined by quality_map
         source_order = ['yahooquery', 'fmp', 'eodhd', 'yfinance']
-        
+
         for source_name in source_order:
             source_data = source_results.get(source_name)
             if not source_data:
                 continue
-            
+
             sources_used.add(source_name)
-            
+
             for key, value in source_data.items():
                 if value is None:
                     continue
-                
+
                 if key.startswith('_') and key.endswith('_source'):
                     continue
-                
+
                 # 1. Determine Base Quality for this source
-                # Check for explicit keys in SOURCE_QUALITY to handle fallbacks correctly
-                if source_name in SOURCE_QUALITY:
-                    quality = SOURCE_QUALITY[source_name]
+                # Check for explicit keys in quality_map to handle fallbacks correctly
+                if source_name in quality_map:
+                    quality = quality_map[source_name]
                 else:
-                    quality = SOURCE_QUALITY.get(f"{source_name}_info", 5)
-                
+                    quality = quality_map.get(f"{source_name}_info", 5)
+
                 # 2. Check for Field-Specific Override (e.g. calculated_from_statements)
                 source_tag_key = f"_{key}_source"
                 if source_tag_key in source_data:
                     tag = source_data[source_tag_key]
-                    if tag in SOURCE_QUALITY:
-                        quality = SOURCE_QUALITY[tag]
-                
+                    if tag in quality_map:
+                        quality = quality_map[tag]
+
                 should_use = False
-                
+
                 if key not in merged:
                     should_use = True
                 elif merged[key] is None and value is not None:
@@ -622,12 +659,12 @@ class SmartMarketDataFetcher:
                                    symbol=symbol, field=key,
                                    old_source=field_sources.get(key),
                                    new_source=source_name)
-                
+
                 if should_use:
                     merged[key] = value
                     field_sources[key] = source_name
                     field_quality[key] = quality
-        
+
         metadata = {
             'sources_used': list(sources_used),
             'composite_source': f"composite_{'+'.join(sorted(sources_used))}",
@@ -635,11 +672,11 @@ class SmartMarketDataFetcher:
             'field_sources': field_sources,
             'field_quality': field_quality
         }
-        
+
         logger.info("smart_merge_complete", symbol=symbol,
                    total_fields=len(merged), sources=list(sources_used),
                    gaps_filled=gaps_filled)
-        
+
         return merged, metadata
 
     def _calculate_coverage(self, data: Dict) -> float:
@@ -714,25 +751,34 @@ class SmartMarketDataFetcher:
         all_text = "\n\n".join(search_results.values())
         return self.pattern_extractor.extract_from_text(all_text, skip_fields=set())
 
-    def _merge_gap_fill_data(self, merged: Dict[str, Any], gap_fill_data: Dict[str, Any], merge_metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """Merge Tavily data."""
-        tavily_quality = SOURCE_QUALITY['tavily_extraction']
+    def _merge_gap_fill_data(self, merged: Dict[str, Any], gap_fill_data: Dict[str, Any], merge_metadata: Dict[str, Any], source_quality: Dict[str, float] = None) -> Dict[str, Any]:
+        """
+        Merge Tavily data.
+
+        Args:
+            merged: Current merged data
+            gap_fill_data: Data from Tavily to merge
+            merge_metadata: Metadata about the merge
+            source_quality: Optional custom quality map (defaults to SOURCE_QUALITY)
+        """
+        quality_map = source_quality or SOURCE_QUALITY
+        tavily_quality = quality_map['tavily_extraction']
         added = 0
         for key, value in gap_fill_data.items():
             if value is None: continue
             should_use = False
-            
+
             if key not in merged: should_use = True
             elif merged[key] is None: should_use = True
             elif key in merge_metadata['field_quality'] and tavily_quality > merge_metadata['field_quality'][key]:
                 should_use = True
-            
+
             if should_use:
                 merged[key] = value
                 merge_metadata['field_sources'][key] = 'tavily'
                 merge_metadata['field_quality'][key] = tavily_quality
                 added += 1
-        
+
         merge_metadata['gaps_filled'] += added
         return merged
 
@@ -836,43 +882,51 @@ class SmartMarketDataFetcher:
         """
         UNIFIED APPROACH: Main entry point with parallel sources and mandatory gap-filling.
         Includes EODHD fallback.
+        Uses Indian-specific source quality for .NS/.BO tickers (FMP promoted to primary).
         """
         self.stats['fetches'] += 1
         start_time = datetime.now()
-        
+
         try:
             # PHASE 1: Parallel source execution
             source_results = await self._fetch_all_sources_parallel(ticker)
-            
+
             # PHASE 3: Smart merge with quality scoring
-            merged, merge_metadata = self._smart_merge_with_quality(source_results, ticker)
+            # Use Indian-specific quality map for Indian stocks
+            quality_map = SOURCE_QUALITY_INDIAN if is_indian_stock(ticker) else SOURCE_QUALITY
+
+            if is_indian_stock(ticker):
+                logger.info("using_indian_quality_map", ticker=ticker,
+                          msg="FMP promoted to primary for Indian stock")
+
+            merged, merge_metadata = self._smart_merge_with_quality(source_results, ticker, quality_map)
             
             # Panic Mode for Asian tickers
             basics_failed = not all(k in merged for k in self.REQUIRED_BASICS)
             is_asian = ticker.endswith(('.HK', '.TW', '.KS', '.T'))
-            
+
             if not merged or (is_asian and basics_failed):
-                logger.warning("data_vacuum_detected", symbol=ticker, 
+                logger.warning("data_vacuum_detected", symbol=ticker,
                              msg="Triggering Panic Mode for Asian ticker")
                 all_critical = self.IMPORTANT_FIELDS + self.REQUIRED_BASICS
                 tavily_rescue = await self._fetch_tavily_gaps(ticker, all_critical)
                 if tavily_rescue:
-                    merged = self._merge_gap_fill_data(merged, tavily_rescue, merge_metadata)
+                    merged = self._merge_gap_fill_data(merged, tavily_rescue, merge_metadata, quality_map)
                     if 'currentPrice' not in merged and 'price' in tavily_rescue:
                         merged['currentPrice'] = tavily_rescue['price']
-            
+
             if not merged:
                 return {"error": "No data available", "symbol": ticker}
-            
+
             # PHASE 4: Calculate coverage
             coverage = self._calculate_coverage(merged)
             gaps = self._identify_critical_gaps(merged)
-            
+
             # PHASE 5: Mandatory Tavily gap-filling if needed
             if coverage < 0.70 and gaps:
                 tavily_data = await self._fetch_tavily_gaps(ticker, gaps)
                 if tavily_data:
-                    merged = self._merge_gap_fill_data(merged, tavily_data, merge_metadata)
+                    merged = self._merge_gap_fill_data(merged, tavily_data, merge_metadata, quality_map)
             
             # Derived & Normalize
             calculated = self._calculate_derived_metrics(merged, ticker)
