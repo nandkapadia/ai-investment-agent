@@ -25,6 +25,7 @@ from src.stocktwits_api import StockTwitsAPI
 from src.data.fetcher import fetcher as market_data_fetcher
 from src.data.moneycontrol_fetcher import get_moneycontrol_fetcher
 from src.data.screener_in_fetcher import get_screener_in_fetcher
+from src.data.trendlyne_fetcher import get_trendlyne_fetcher
 
 logger = structlog.get_logger(__name__)
 stocktwits_api = StockTwitsAPI()
@@ -616,6 +617,127 @@ No recent concall transcript available for this stock on Screener.in."""
         return f"Error fetching conference call summary for {ticker}: {str(e)}"
 
 
+@tool
+async def get_trendlyne_analysis(ticker: Annotated[str, "Stock ticker symbol"]) -> str:
+    """
+    Get comprehensive Trendlyne analysis for Indian stocks.
+
+    Fetches unique Indian market insights from Trendlyne.com:
+    - Ownership breakdown (Promoter/FII/DII/Public holdings)
+    - Pledged shares percentage (critical risk indicator)
+    - Trendlyne quality and health scores
+    - Peer comparison metrics
+    - Brokerage price target consensus
+
+    Args:
+        ticker: Stock ticker (e.g., 'RELIANCE.NS')
+
+    Returns:
+        Formatted string with Trendlyne analysis
+    """
+    logger.info("get_trendlyne_analysis_called", ticker=ticker)
+
+    try:
+        trendlyne_fetcher = get_trendlyne_fetcher()
+        analysis = await trendlyne_fetcher.get_comprehensive_analysis(ticker)
+
+        if not analysis:
+            return f"""Trendlyne Analysis for {ticker}:
+Status: No data available
+
+Unable to retrieve Trendlyne data for this stock.
+The stock may not be covered or data may be temporarily unavailable."""
+
+        result = f"""Trendlyne Comprehensive Analysis - {ticker}:
+
+"""
+
+        # Ownership breakdown
+        if analysis.get('promoter_holding') is not None:
+            result += "OWNERSHIP PATTERN:\n"
+            result += f"- Promoter Holding: {analysis['promoter_holding']:.2f}%\n"
+
+            if analysis.get('fii_holding') is not None:
+                result += f"- FII Holding: {analysis['fii_holding']:.2f}%\n"
+
+            if analysis.get('dii_holding') is not None:
+                result += f"- DII Holding: {analysis['dii_holding']:.2f}%\n"
+
+            if analysis.get('public_holding') is not None:
+                result += f"- Public Holding: {analysis['public_holding']:.2f}%\n"
+
+            # Critical: Pledged shares
+            if analysis.get('pledged_percentage') is not None:
+                pledge = analysis['pledged_percentage']
+                if pledge > 50:
+                    risk_level = "HIGH RISK"
+                elif pledge > 20:
+                    risk_level = "MODERATE RISK"
+                else:
+                    risk_level = "LOW RISK"
+
+                result += f"- **Pledged Shares: {pledge:.2f}% ({risk_level})**\n"
+
+            result += "\n"
+
+        # Quality scores
+        if analysis.get('trendlyne_rating') is not None:
+            result += "TRENDLYNE SCORES:\n"
+            result += f"- Overall Rating: {analysis['trendlyne_rating']:.1f}/10\n"
+
+            if analysis.get('financial_health') is not None:
+                result += f"- Financial Health: {analysis['financial_health']:.1f}/10\n"
+
+            if analysis.get('valuation_rating') is not None:
+                result += f"- Valuation: {analysis['valuation_rating']:.1f}/10\n"
+
+            if analysis.get('growth_rating') is not None:
+                result += f"- Growth: {analysis['growth_rating']:.1f}/10\n"
+
+            result += "\n"
+
+        # Price targets
+        if analysis.get('consensus_target') is not None:
+            result += "BROKERAGE PRICE TARGETS:\n"
+            result += f"- Consensus Target: ₹{analysis['consensus_target']:,.0f}\n"
+
+            if analysis.get('high_target') and analysis.get('low_target'):
+                result += f"- Target Range: ₹{analysis['low_target']:,.0f} - ₹{analysis['high_target']:,.0f}\n"
+
+            if analysis.get('num_brokerages'):
+                result += f"- Number of Brokerages: {analysis['num_brokerages']}\n"
+
+            if analysis.get('upside_percentage') is not None:
+                result += f"- Implied Upside: {analysis['upside_percentage']:.1f}%\n"
+
+            result += "\n"
+
+        # Peer comparison
+        if analysis.get('peers'):
+            result += "PEER COMPANIES:\n"
+            for peer in analysis['peers'][:5]:
+                result += f"- {peer}\n"
+
+            if analysis.get('sector_pe_avg'):
+                result += f"\nSector Avg P/E: {analysis['sector_pe_avg']:.1f}\n"
+
+            if analysis.get('sector_pb_avg'):
+                result += f"Sector Avg P/B: {analysis['sector_pb_avg']:.1f}\n"
+
+            result += "\n"
+
+        result += "Source: Trendlyne.com\n\n"
+        result += "Note: Trendlyne provides proprietary ratings based on comprehensive Indian market analysis."
+
+        logger.info("trendlyne_analysis_fetched", ticker=ticker)
+
+        return result
+
+    except Exception as e:
+        logger.error("trendlyne_analysis_error", ticker=ticker, error=str(e), exc_info=True)
+        return f"Error fetching Trendlyne analysis for {ticker}: {str(e)}"
+
+
 class Toolkit:
     def __init__(self):
         self.market_data_fetcher = market_data_fetcher
@@ -634,14 +756,16 @@ class Toolkit:
         get_fundamental_analysis,
         get_indian_analyst_consensus,
         get_indian_financial_history,
-        get_latest_concall_summary
+        get_latest_concall_summary,
+        get_trendlyne_analysis
     ]
     def get_sentiment_tools(self): return [get_social_media_sentiment, get_multilingual_sentiment_search]
     def get_news_tools(self): return [get_news, get_macroeconomic_news]
     def get_indian_tools(self): return [
         get_indian_analyst_consensus,
         get_indian_financial_history,
-        get_latest_concall_summary
+        get_latest_concall_summary,
+        get_trendlyne_analysis
     ]
     def get_all_tools(self): return [
         get_yfinance_data,
@@ -655,7 +779,8 @@ class Toolkit:
         get_fundamental_analysis,
         get_indian_analyst_consensus,
         get_indian_financial_history,
-        get_latest_concall_summary
+        get_latest_concall_summary,
+        get_trendlyne_analysis
     ]
 
 toolkit = Toolkit()
