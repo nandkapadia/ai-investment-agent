@@ -7,6 +7,14 @@ from src.data.fetcher import fetcher as market_data_fetcher
 
 logger = structlog.get_logger(__name__)
 
+# Try to import intraday analyzer (optional)
+try:
+    from src.data.intraday_liquidity import IntradayLiquidityAnalyzer
+    INTRADAY_AVAILABLE = True
+except ImportError:
+    INTRADAY_AVAILABLE = False
+    logger.info("intraday_analysis_not_available", msg="Install intraday module for enhanced liquidity analysis")
+
 # COMPREHENSIVE GLOBAL CURRENCY MAP
 # format: suffix -> (currency_code, fx_rate_to_usd)
 # Rates approximate as of late 2024/early 2025
@@ -82,16 +90,49 @@ EXCHANGE_INFO = {
 async def calculate_liquidity_metrics(ticker: Annotated[Optional[str], "Stock ticker symbol"] = None) -> str:
     """
     Calculate liquidity metrics for Indian stocks (NSE/BSE).
-    Checks 3-month average volume and turnover in INR.
-    Thresholds calibrated specifically for Indian market conditions.
+
+    Enhanced with intraday analysis when available:
+    - Manipulation detection (volume concentration, end-of-day ramps)
+    - Liquidity consistency (sporadic vs continuous trading)
+    - Institutional signature (FII/DII patterns)
+    - Optimal entry time recommendations
+
+    Falls back to daily data if intraday data not available.
     """
     if not ticker:
         return "Error: No ticker symbol provided."
 
     normalized_symbol = normalize_ticker(ticker)
 
+    # Try enhanced intraday analysis first (if available)
+    if INTRADAY_AVAILABLE:
+        try:
+            analyzer = IntradayLiquidityAnalyzer()
+
+            if analyzer.is_available():
+                metrics = await analyzer.calculate_liquidity_score(normalized_symbol, lookback_days=90)
+
+                if metrics is not None:
+                    # Rich output with intraday insights
+                    turnover_lakhs = metrics['avg_daily_turnover_inr'] / 1_00_000
+
+                    return f"""Liquidity Analysis for {ticker}:
+Status: {metrics['final_status']}
+
+BASIC METRICS:
+Avg Daily Turnover: ₹{turnover_lakhs:.2f} lakhs (₹{int(metrics['avg_daily_turnover_inr']):,})
+Thresholds: ₹12L PASS | ₹6-12L MARGINAL | <₹6L FAIL
+
+{metrics['details']}
+
+📊 ENHANCED ANALYSIS: Based on 90 days of 1-minute data
+"""
+        except Exception as e:
+            logger.warning("intraday_analysis_failed", ticker=ticker, error=str(e),
+                         msg="Falling back to daily data analysis")
+
+    # Fallback to daily data analysis (original logic)
     try:
-        # Use the robust fetcher for history
         hist = await market_data_fetcher.get_historical_prices(normalized_symbol, period="3mo")
 
         if hist.empty:
@@ -141,6 +182,9 @@ Avg Daily Volume (3mo): {int(avg_volume):,}
 Avg Daily Turnover: ₹{turnover_lakhs:.2f} lakhs (₹{int(avg_turnover_inr):,})
 Thresholds: ₹12L PASS | ₹6-12L MARGINAL | <₹6L FAIL
 Exchange: {suffix}
+
+ℹ️  BASIC ANALYSIS: Using daily data only
+   (Install intraday data for manipulation detection & institutional analysis)
 """
 
     except Exception as e:
