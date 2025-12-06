@@ -81,78 +81,66 @@ EXCHANGE_INFO = {
 @tool
 async def calculate_liquidity_metrics(ticker: Annotated[Optional[str], "Stock ticker symbol"] = None) -> str:
     """
-    Calculate liquidity metrics using the robust MarketDataFetcher.
-    Checks 3-month average volume and turnover.
-    Handles global currency conversion automatically.
+    Calculate liquidity metrics for Indian stocks (NSE/BSE).
+    Checks 3-month average volume and turnover in INR.
+    Thresholds calibrated specifically for Indian market conditions.
     """
     if not ticker:
         return "Error: No ticker symbol provided."
 
     normalized_symbol = normalize_ticker(ticker)
-    
+
     try:
         # Use the robust fetcher for history
         hist = await market_data_fetcher.get_historical_prices(normalized_symbol, period="3mo")
-        
+
         if hist.empty:
             logger.warning("no_history_found", ticker=ticker)
             return f"""Liquidity Analysis for {ticker}:
 Status: FAIL - Insufficient Data
 Avg Daily Volume (3mo): N/A
-Avg Daily Turnover (USD): N/A
+Avg Daily Turnover (INR): N/A
 """
 
         # Calculate metrics
         avg_volume = hist['Volume'].mean()
         avg_close = hist['Close'].mean()
-        
-        # Calculate local turnover
-        # NOTE: For UK stocks (.L), prices are in Pence, so we must divide by 100 
-        # to get Pounds before converting to USD.
-        if normalized_symbol.endswith('.L'):
-            avg_turnover_local = avg_volume * (avg_close / 100.0)
-            logger.info("pence_adjustment_applied", ticker=ticker)
-        else:
-            avg_turnover_local = avg_volume * avg_close
-        
-        # Determine FX Rate based on suffix
-        suffix = 'US' # Default
-        if '.' in normalized_symbol:
-            suffix = normalized_symbol.split('.')[-1].upper()
-            
-        # Special handling: If no dot, but not US exchange (rare edge case for clean tickers)
-        # We assume US for clean tickers (e.g. AAPL) which aligns with 'US' default.
-        
-        if suffix in EXCHANGE_INFO:
-            currency, fx_rate = EXCHANGE_INFO[suffix]
-            logger.info("using_static_fx_rate", ticker=ticker, suffix=suffix, currency=currency, rate=fx_rate)
-        else:
-            # Fallback for unknown suffixes (assume 1.0 but flag it)
-            currency = "Unknown (Assumed USD)"
-            fx_rate = 1.0
-            logger.warning("unknown_currency_suffix", ticker=ticker, suffix=suffix, default="1.0")
 
-        avg_turnover_usd = avg_turnover_local * fx_rate
+        # Calculate turnover in INR (prices from yfinance are already in INR for Indian stocks)
+        avg_turnover_inr = avg_volume * avg_close
 
-        # Threshold adjusted for Indian market conditions
-        # Indian small/mid caps have lower liquidity than US counterparts
-        # $150k is more appropriate for emerging markets like India
-        # while $500k was calibrated for US/developed markets
-        if suffix in ['NS', 'BO']:  # Indian exchanges (NSE, BSE)
-            threshold_usd = 150_000  # $150k for Indian stocks
-            threshold_label = "$150,000 USD daily (Indian market threshold)"
+        # Determine exchange suffix
+        suffix = 'NS' if '.NS' in normalized_symbol else 'BO' if '.BO' in normalized_symbol else 'UNKNOWN'
+
+        # Indian market thresholds in INR (no USD conversion needed)
+        # ₹12 lakhs = good liquidity for small/mid caps
+        # ₹6 lakhs = marginal (max 3% position size)
+        # <₹6 lakhs = too illiquid (hard fail)
+        threshold_inr = 12_00_000  # ₹12 lakhs
+        marginal_threshold_inr = 6_00_000  # ₹6 lakhs
+
+        if avg_turnover_inr >= threshold_inr:
+            status = "PASS"
+            status_detail = "Good liquidity"
+        elif avg_turnover_inr >= marginal_threshold_inr:
+            status = "MARGINAL"
+            status_detail = "Acceptable liquidity (max 3% position size)"
         else:
-            threshold_usd = 500_000  # $500k for other markets
-            threshold_label = "$500,000 USD daily"
+            status = "FAIL"
+            status_detail = "Insufficient liquidity"
 
-        status = "PASS" if avg_turnover_usd > threshold_usd else "FAIL"
+        # Format in lakhs for readability (1 lakh = 100,000)
+        turnover_lakhs = avg_turnover_inr / 1_00_000
+
+        logger.info("liquidity_calculated", ticker=ticker, suffix=suffix,
+                   turnover_inr=avg_turnover_inr, status=status)
 
         return f"""Liquidity Analysis for {ticker}:
-Status: {status}
+Status: {status} - {status_detail}
 Avg Daily Volume (3mo): {int(avg_volume):,}
-Avg Daily Turnover (USD): ${int(avg_turnover_usd):,}
-Details: {currency} turnover converted at FX rate {fx_rate}
-Threshold: {threshold_label}
+Avg Daily Turnover: ₹{turnover_lakhs:.2f} lakhs (₹{int(avg_turnover_inr):,})
+Thresholds: ₹12L PASS | ₹6-12L MARGINAL | <₹6L FAIL
+Exchange: {suffix}
 """
 
     except Exception as e:

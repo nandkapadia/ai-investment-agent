@@ -1079,7 +1079,7 @@ Your role is to advocate aggressively for BUY opportunities that align with thes
 - Growth score ≥3/6 (preferably ≥4/6 for strong conviction)
 - US revenue <25% (or <35% if ≥30% undervalued + ≥3 catalysts)
 - **P/E ≤22 OR (P/E 22-28 with PEG ≤1.2)**
-- Liquidity >$150k daily average (>$75k minimum for small caps) - Indian market threshold
+- Liquidity >₹12 lakhs daily average (>₹6 lakhs minimum for small caps)
 - Analyst coverage <10 US/English analysts ("undiscovered" status)
 - **No US ADR listing** (violates "undiscovered" criterion)
 
@@ -1662,7 +1662,7 @@ The user needs the complete data table filled out regardless of your final decis
 2. **Growth Transition Score**:
    - **Standard**: Adjusted Score < 50% -> FAIL
    - **Turnaround Exception**: Adjusted Score < 50% -> PASS *IF* Adjusted Health >= 65% AND P/E < 15.0
-3. **Liquidity FAIL** (<$75k avg daily for Indian stocks - CONFIRMED only, not data errors)
+3. **Liquidity FAIL** (<₹6 lakhs avg daily - CONFIRMED only, not data errors)
 4. **Analyst Coverage >= 15** (UPDATED: Raised from 10 to capture emerging/mid-caps)
 5. **US Revenue > 35%** (ONLY IF DISCLOSED - "Not disclosed" is not a hard fail)
 6. **P/E > 30** OR **(P/E > 22 AND PEG > 1.3)** - Indian market thresholds
@@ -1675,12 +1675,12 @@ The user needs the complete data table filled out regardless of your final decis
 - >35%: FAIL (hard fail)
 - Not disclosed: N/A (neutral)
 
-**Liquidity Thresholds** - Indian market calibration:
-- <$75k daily: HARD FAIL
-- $75k-$150k daily: MARGINAL (passes hard fail but max 3% position size)
-- >$150k daily: PASS
+**Liquidity Thresholds** - Indian market (INR):
+- <₹6 lakhs daily: HARD FAIL
+- ₹6-12 lakhs daily: MARGINAL (passes hard fail but max 3% position size)
+- >₹12 lakhs daily: PASS
 
-**If liquidity ERROR (not value <$75k) -> NOT a hard fail, default to HOLD.**
+**If liquidity ERROR (not value <₹6L) -> NOT a hard fail, default to HOLD.**
 
 **IF ANY hard fail -> MANDATORY SELL. No exceptions.**
 
