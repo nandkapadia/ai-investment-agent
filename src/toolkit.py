@@ -133,11 +133,32 @@ async def get_financial_metrics(ticker: Annotated[str, "Stock ticker symbol"]) -
             return f"Data Unavailable: {data.get('error')}"
             
         current_price = _safe_float(data.get('currentPrice', data.get('regularMarketPrice', 0)))
-        # Sanity check for negative price (data corruption)
-        if current_price is not None and current_price < 0:
-            logger.warning(f"Negative price detected for {ticker}: {current_price}")
-            current_price = None
-            
+
+        # Sanity check for negative price (data corruption) with fallback recovery
+        if current_price is not None and current_price <= 0:
+            logger.warning(f"Invalid price detected for {ticker}: {current_price}, attempting recovery")
+            # Fallback chain: try alternate price fields
+            current_price = (
+                _safe_float(data.get('previousClose')) or
+                _safe_float(data.get('regularMarketPreviousClose')) or
+                _safe_float(data.get('open')) or
+                _safe_float(data.get('regularMarketOpen'))
+            )
+
+            # If all structured fields failed, try to get from recent history
+            if current_price is None or current_price <= 0:
+                try:
+                    logger.info(f"Attempting historical price fallback for {ticker}")
+                    hist = await market_data_fetcher.get_historical_prices(normalized_symbol, period="1d")
+                    if not hist.empty and 'Close' in hist.columns:
+                        current_price = float(hist['Close'].iloc[-1])
+                        logger.info(f"Recovered price from history for {ticker}: {current_price}")
+                except Exception as e:
+                    logger.error(f"Historical price fallback failed for {ticker}: {str(e)}")
+
+            if current_price and current_price > 0:
+                logger.info(f"Successfully recovered valid price for {ticker}: {current_price}")
+
         currency = data.get('currency', 'N/A')
         analyst_count = data.get('numberOfAnalystOpinions')
         
@@ -203,7 +224,8 @@ async def get_news(
     
     try:
         normalized_symbol = normalize_ticker(ticker)
-        ticker_obj = yf.Ticker(normalized_symbol)
+        # Create Ticker object in thread pool to avoid blocking event loop
+        ticker_obj = await asyncio.to_thread(yf.Ticker, normalized_symbol)
         company_name = await extract_company_name_async(ticker_obj)
         
         # Local Domain Mapping
@@ -332,7 +354,8 @@ async def get_fundamental_analysis(ticker: Annotated[str, "Stock ticker symbol"]
     try:
         # Get company name for potential fallback/surgical search
         normalized_symbol = normalize_ticker(ticker)
-        ticker_obj = yf.Ticker(normalized_symbol)
+        # Create Ticker object in thread pool to avoid blocking event loop
+        ticker_obj = await asyncio.to_thread(yf.Ticker, normalized_symbol)
         company_name = await extract_company_name_async(ticker_obj)
         
         # 1. Primary Search: Ticker-based (Most specific to the listing)

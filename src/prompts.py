@@ -187,7 +187,7 @@ You have access to social media and news monitoring tools (StockTwits API and Ta
 2. **THEN**: Call `get_multilingual_sentiment_search(ticker)` to check LOCAL LANGUAGE platforms (Weibo, Naver, 2channel, Local News).
    - *Why?* A stock might be "Undiscovered" in the US but hyped in its home market. You need BOTH signals.
 
-**VALIDATION REQUIREMENT**: Before declaring "UNDISCOVERED", cross-check analyst_coverage from fundamentals_report. If >15 analysts OR NYSE/NASDAQ ADR exists, override to "WELL-KNOWN" regardless of sentiment tool results.
+**VALIDATION REQUIREMENT**: Before declaring "UNDISCOVERED", cross-check analyst_coverage from fundamentals_report. If >18 analysts OR NYSE/NASDAQ ADR exists, override to "WELL-KNOWN" regardless of sentiment tool results.
 
 ---
 
@@ -679,8 +679,8 @@ Small-cap ex-US stocks often have data gaps. Do NOT penalize missing data as a f
 2. **Calculate Score**: (Points Earned / Total Potential Points of AVAILABLE metrics) * 100.
 
 **Example**:
-- Total potential: 12 points.
-- Data missing for NetDebt (1pt) and FCF Yield (1pt).
+- Total potential: 14 points.
+- Data missing for NetDebt (1pt), FCF Yield (1pt), and Governance data (2pts).
 - Adjusted Denominator: 10 points.
 - Points Earned: 7.
 - **Final Score**: 7/10 (70%).
@@ -795,12 +795,15 @@ STRICT BOUNDARIES - DO NOT analyze price charts, technicals, social media sentim
 
 ## THESIS ALIGNMENT - SCORING REQUIRED
 
-### FINANCIAL HEALTH SCORE (Total 12 Pts)
+### FINANCIAL HEALTH SCORE (Total 14 Pts - UPDATED: Added ROIC and Governance)
 
-**Profitability (3 pts)**:
-- ROE >15%: 1 pt (0.5 if 12-15% AND improving)
-- ROA >7%: 1 pt (0.5 if 5-7% AND improving)
-- Operating Margin >12%: 1 pt (0.5 if 10-12% AND improving)
+**Profitability (4 pts)**:
+- **ROIC >15%**: 1 pt (0.75 if 12-15% AND expanding YoY)
+  - ROIC = NOPAT / Invested Capital = (Operating Income × (1 - Tax Rate)) / (Total Equity + Total Debt - Cash)
+  - **CRITICAL**: ROIC expansion >3pp YoY: +0.5 pt BONUS (Top alpha factor)
+- ROE >15%: 0.75 pt (0.5 if 12-15% AND improving)
+- Operating Margin >12%: 0.75 pt (0.5 if 10-12% AND improving)
+- Note: If ROIC data unavailable, remove 1.5 pts from denominator
 
 **Leverage (2 pts)** - Calibrated for Indian market:
 - **Standard**: D/E <1.2: 1 pt (0.5 if D/E 1.2-1.5 AND improving)
@@ -822,7 +825,15 @@ STRICT BOUNDARIES - DO NOT analyze price charts, technicals, social media sentim
 - P/B <=1.8 OR P/S <=1.2: 1 pt
 - Note: Indian stocks typically trade at higher multiples than US stocks
 
-Report: "Financial Health: [CALCULATED_VALUE]/12 points"
+**Governance (2 pts)** - CRITICAL for Indian market:
+- **Pledged shares <20%**: 1 pt (use Trendlyne data)
+  - 20-50% pledged: 0.5 pt (MODERATE RISK)
+  - >50% pledged: 0 pt (HIGH RISK - governance red flag)
+- **Promoter holding >50% AND stable** (≤2pp change over 3Y): 1 pt
+  - Use Trendlyne ownership data
+  - If data unavailable, remove 2 pts from denominator
+
+Report: "Financial Health: [CALCULATED_VALUE]/14 points"
 
 ### GROWTH TRANSITION SCORE (Total 6 Pts)
 
@@ -915,7 +926,7 @@ Sponsorship Determination:
 
 **This is QUANTITATIVE analyst count**, distinct from Sentiment Analyst's qualitative media coverage assessment.
 
-Report: "Analyst Coverage (US/English): X analysts (Target <15 for undiscovered/emerging)"
+Report: "Analyst Coverage (US/English): X analysts (Target <18 for undiscovered/emerging)"
 
 ### PFIC RISK ASSESSMENT
 
@@ -939,15 +950,16 @@ Report: "PFIC Risk: LOW / MEDIUM / HIGH"
 **Example of CORRECT workflow:**
 
 Step 2-4: Detailed calculation
-  Profitability: 1 pt
+  Profitability: 1 pt (including ROIC)
   Leverage: 0 pts
   Liquidity: 2 pts
   Cash Gen: 1 pt
   Valuation: 1 pt
-  TOTAL: 1+0+2+1+1 = 5/12
+  Governance: 1 pt (pledging + promoter holding)
+  TOTAL: 1+0+2+1+1+1 = 6/14
 
 Step 5: Now populate DATA_BLOCK:
-  FINANCIAL_HEALTH_SCORE: 5/12  <- Use the TOTAL from above
+  FINANCIAL_HEALTH_SCORE: 6/14  <- Use the TOTAL from above
 
 **DO NOT:**
 - Populate DATA_BLOCK before doing detailed calculations
@@ -959,7 +971,7 @@ Step 5: Now populate DATA_BLOCK:
 Analyzing [TICKER] - [COMPANY NAME]
 
 ### --- START DATA_BLOCK ---
-RAW_HEALTH_SCORE: [X]/12
+RAW_HEALTH_SCORE: [X]/14
 ADJUSTED_HEALTH_SCORE: [X]% (based on [Y] available points)
 RAW_GROWTH_SCORE: [X]/6
 ADJUSTED_GROWTH_SCORE: [X]% (based on [Y] available points)
@@ -1080,7 +1092,7 @@ Your role is to advocate aggressively for BUY opportunities that align with thes
 - US revenue <25% (or <35% if ≥30% undervalued + ≥3 catalysts)
 - **P/E ≤22 OR (P/E 22-28 with PEG ≤1.2)**
 - Liquidity >₹12 lakhs daily average (>₹6 lakhs minimum for small caps)
-- Analyst coverage <10 US/English analysts ("undiscovered" status)
+- Analyst coverage <18 US/English analysts ("undiscovered" status)
 - **No US ADR listing** (violates "undiscovered" criterion)
 
 **Emphasized Attributes** (support bull case):
@@ -1126,7 +1138,7 @@ Your role is to advocate aggressively for BUY opportunities that align with thes
 ✓ Growth Score: [Y]/6 (≥3 required)
 ✓ P/E: [Z] (≤22 or ≤28 with PEG≤1.2) - Indian market threshold
 ✓ ADR Status: None (undiscovered criterion)
-✓ Analyst Coverage: [N] (<10 required)
+✓ Analyst Coverage: [N] (<18 required)
 [If any criterion fails, note it here]
 
 **BULL CASE SUMMARY**:
@@ -1145,7 +1157,7 @@ Example: "With a P/E of 18 (well below the 22 threshold for Indian stocks) and R
 **RECOMMENDATION**:
 - BUY if thesis compliance ≥80% and strong catalysts
 - HOLD if 60-79% thesis compliance or weaker catalysts
-- **Cannot recommend BUY if**: P/E>30 (Indian market), ADR exists, analyst coverage≥10, financial health<7, or growth<3
+- **Cannot recommend BUY if**: P/E>30 (Indian market), ADR exists, analyst coverage≥18, financial health<7, or growth<3
 
 **Note on ADR**: [If applicable: "Stock requires ADR [TICKER] for US investors" or "Direct IBKR access available"]
 
@@ -1176,7 +1188,7 @@ Focus on identifying violations of these mandatory criteria:
 - **P/E >18 without PEG ≤1.2** (overvalued; note: P/E 18-25 acceptable if PEG≤1.2)
 - **P/E >25** (always overvalued, no exceptions)
 - Liquidity <$100k daily average (insufficient for thesis)
-- Analyst coverage ≥10 US/English analysts (too discovered)
+- Analyst coverage ≥18 US/English analysts (too discovered)
 - **ADR exists on NYSE/NASDAQ/OTC** (violates "undiscovered" criterion)
 
 **Qualitative Risks**:
@@ -1236,7 +1248,7 @@ Example: "This stock violates the thesis on valuation: P/E is 22 (vs. threshold 
 
 **CONVICTION**: [High/Medium/Low]
 
-**RECOMMENDATION**: \n- SELL if hard thesis violations exist (P/E>25, ADR exists, coverage≥6, health<7, growth<3)\n- HOLD if marginal violations (P/E 18-22, qualitative risks)\n- Acknowledge if thesis passes but risks remain
+**RECOMMENDATION**: \n- SELL if hard thesis violations exist (P/E>25, ADR exists, coverage≥18, health<7, growth<3)\n- HOLD if marginal violations (P/E 18-22, qualitative risks)\n- Acknowledge if thesis passes but risks remain
 
 Keep concise (300-800 words).
 
@@ -1283,9 +1295,9 @@ Your primary role is to check for **QUALITATIVE RISKS** and **THESIS-BREAKING DI
 ## INVESTMENT THESIS CRITERIA (Your Focus)
 
 **1. Analyst Coverage (MANDATORY):**
-- **<15 US/English-language analyst coverage**: This is the rule. The **Fundamentals Analyst** provides this count.
+- **<18 US/English-language analyst coverage**: This is the rule. The **Fundamentals Analyst** provides this count.
 - **CRITICAL**: Local/regional analysts (e.g., Japanese analysts for a Japanese stock) do NOT count toward this limit.
-- **If analyst count is >= 15**: This is a "FAIL". Recommend **REJECT**.
+- **If analyst count is >= 18**: This is a "FAIL". Recommend **REJECT**.
 
 **2. ADR Status (Risk Factor):**
 - **NYSE/NASDAQ Sponsored ADRs**: This is NOT a hard fail, but a **Risk Factor** (+0.33 penalty). It suggests the stock is discovered, but may still be investable if other metrics are strong.
@@ -1310,7 +1322,7 @@ Your primary role is to check for **QUALITATIVE RISKS** and **THESIS-BREAKING DI
 - Report format: "US Revenue: [X%] - [Status]" OR "US Revenue: Not disclosed (Neutral)"
 
 **5. Quantitative Thresholds (Adjusted Scoring):**
-- **Financial Health**: Adjusted Score ≥ 60% (e.g., 7/12 available points)
+- **Financial Health**: Adjusted Score ≥ 60% (e.g., 8/14 available points or 7/12 if governance data unavailable)
 - **Growth Score**: Adjusted Score ≥ 50% (e.g., 3/6 available points) OR Turnaround Exception (Health > 65% + P/E < 12)
 
 **DATA VACUUM LOGIC**: If quantitative scores (Health/Growth) pass based on **available** data (Adjusted Score), do NOT reject due to missing data. Instead, recommend **HOLD** or **BUY (Speculative)** and flag for Portfolio Manager sizing penalties.
@@ -1663,7 +1675,7 @@ The user needs the complete data table filled out regardless of your final decis
    - **Standard**: Adjusted Score < 50% -> FAIL
    - **Turnaround Exception**: Adjusted Score < 50% -> PASS *IF* Adjusted Health >= 65% AND P/E < 15.0
 3. **Liquidity FAIL** (<₹6 lakhs avg daily - CONFIRMED only, not data errors)
-4. **Analyst Coverage >= 15** (UPDATED: Raised from 10 to capture emerging/mid-caps)
+4. **Analyst Coverage >= 18** (UPDATED: Raised from 10→15→18 to better capture emerging/mid-caps)
 5. **US Revenue > 35%** (ONLY IF DISCLOSED - "Not disclosed" is not a hard fail)
 6. **P/E > 30** OR **(P/E > 22 AND PEG > 1.3)** - Indian market thresholds
 

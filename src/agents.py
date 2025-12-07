@@ -166,6 +166,43 @@ def filter_messages_for_gemini(messages: List[BaseMessage]) -> List[BaseMessage]
             filtered.append(msg)
     return filtered
 
+def extract_datablock(fundamentals_report: str) -> Dict[str, Any]:
+    """
+    Extract structured data from DATA_BLOCK section in fundamentals report.
+
+    Args:
+        fundamentals_report: The full fundamentals analyst report string
+
+    Returns:
+        Dictionary with parsed DATA_BLOCK fields
+    """
+    import re
+
+    if not fundamentals_report:
+        logger.warning("No fundamentals report provided for DATA_BLOCK extraction")
+        return {}
+
+    # Look for DATA_BLOCK section
+    pattern = r'### --- START DATA_BLOCK ---\n(.*?)\n### --- END DATA_BLOCK ---'
+    match = re.search(pattern, fundamentals_report, re.DOTALL)
+
+    if not match:
+        logger.warning("No DATA_BLOCK found in fundamentals report")
+        return {}
+
+    data_block_text = match.group(1)
+    data = {}
+
+    # Parse each line: "KEY: VALUE"
+    for line in data_block_text.split('\n'):
+        line = line.strip()
+        if ':' in line:
+            key, value = line.split(':', 1)
+            data[key.strip()] = value.strip()
+
+    logger.info("Extracted DATA_BLOCK", keys=list(data.keys()), field_count=len(data))
+    return data
+
 # --- Agent Factory Functions ---
 
 def create_analyst_node(llm, agent_key: str, tools: List[Any], output_field: str) -> Callable:
@@ -376,8 +413,43 @@ def create_portfolio_manager_node(llm, memory: Optional[Any]) -> Callable:
         inv_plan = state.get('investment_plan', '')
         trader = state.get('trader_investment_plan', '')
         risk = state.get('risk_debate_state', {}).get('history', '')
-        logger.info("pm_inputs", has_market=bool(market), has_sentiment=bool(sentiment), has_news=bool(news), has_fundamentals=bool(fundamentals), has_datablock="DATA_BLOCK" in fundamentals if fundamentals else False, fund_len=len(fundamentals) if fundamentals else 0)
-        all_context = f"""MARKET ANALYST REPORT:\n{market if market else 'N/A'}\n\nSENTIMENT ANALYST REPORT:\n{sentiment if sentiment else 'N/A'}\n\nNEWS ANALYST REPORT:\n{news if news else 'N/A'}\n\nFUNDAMENTALS ANALYST REPORT:\n{fundamentals if fundamentals else 'N/A'}\n\nRESEARCH MANAGER RECOMMENDATION:\n{inv_plan if inv_plan else 'N/A'}\n\nTRADER PROPOSAL:\n{trader if trader else 'N/A'}\n\nRISK TEAM DEBATE:\n{risk if risk else 'N/A'}"""
+
+        # Extract structured DATA_BLOCK from fundamentals report
+        datablock = extract_datablock(fundamentals)
+        datablock_summary = "\n".join([f"{k}: {v}" for k, v in datablock.items()]) if datablock else "DATA_BLOCK not found"
+
+        logger.info("pm_inputs",
+                   has_market=bool(market),
+                   has_sentiment=bool(sentiment),
+                   has_news=bool(news),
+                   has_fundamentals=bool(fundamentals),
+                   has_datablock=bool(datablock),
+                   datablock_fields=len(datablock),
+                   fund_len=len(fundamentals) if fundamentals else 0)
+
+        all_context = f"""EXTRACTED DATA_BLOCK (Use these exact values for hard fail checks):
+{datablock_summary}
+
+MARKET ANALYST REPORT:
+{market if market else 'N/A'}
+
+SENTIMENT ANALYST REPORT:
+{sentiment if sentiment else 'N/A'}
+
+NEWS ANALYST REPORT:
+{news if news else 'N/A'}
+
+FUNDAMENTALS ANALYST REPORT:
+{fundamentals if fundamentals else 'N/A'}
+
+RESEARCH MANAGER RECOMMENDATION:
+{inv_plan if inv_plan else 'N/A'}
+
+TRADER PROPOSAL:
+{trader if trader else 'N/A'}
+
+RISK TEAM DEBATE:
+{risk if risk else 'N/A'}"""
         prompt = f"""{agent_prompt.system_message}\n\n{all_context}\n\nMake Final Decision."""
         try:
             response = await invoke_with_rate_limit_handling(
