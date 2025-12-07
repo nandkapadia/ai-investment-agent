@@ -7,6 +7,14 @@ from src.data.fetcher import fetcher as market_data_fetcher
 
 logger = structlog.get_logger(__name__)
 
+# Try to import intraday analyzer (optional)
+try:
+    from src.data.intraday_liquidity import IntradayLiquidityAnalyzer
+    INTRADAY_AVAILABLE = True
+except ImportError:
+    INTRADAY_AVAILABLE = False
+    logger.info("intraday_analysis_not_available", msg="Install intraday module for enhanced liquidity analysis")
+
 # COMPREHENSIVE GLOBAL CURRENCY MAP
 # format: suffix -> (currency_code, fx_rate_to_usd)
 # Rates approximate as of late 2024/early 2025
@@ -81,69 +89,102 @@ EXCHANGE_INFO = {
 @tool
 async def calculate_liquidity_metrics(ticker: Annotated[Optional[str], "Stock ticker symbol"] = None) -> str:
     """
-    Calculate liquidity metrics using the robust MarketDataFetcher.
-    Checks 3-month average volume and turnover.
-    Handles global currency conversion automatically.
+    Calculate liquidity metrics for Indian stocks (NSE/BSE).
+
+    Enhanced with intraday analysis when available:
+    - Manipulation detection (volume concentration, end-of-day ramps)
+    - Liquidity consistency (sporadic vs continuous trading)
+    - Institutional signature (FII/DII patterns)
+    - Optimal entry time recommendations
+
+    Falls back to daily data if intraday data not available.
     """
     if not ticker:
         return "Error: No ticker symbol provided."
 
     normalized_symbol = normalize_ticker(ticker)
-    
+
+    # Try enhanced intraday analysis first (if available)
+    if INTRADAY_AVAILABLE:
+        try:
+            analyzer = IntradayLiquidityAnalyzer()
+
+            if analyzer.is_available():
+                metrics = await analyzer.calculate_liquidity_score(normalized_symbol, lookback_days=90)
+
+                if metrics is not None:
+                    # Rich output with intraday insights
+                    turnover_lakhs = metrics['avg_daily_turnover_inr'] / 1_00_000
+
+                    return f"""Liquidity Analysis for {ticker}:
+Status: {metrics['final_status']}
+
+BASIC METRICS:
+Avg Daily Turnover: ₹{turnover_lakhs:.2f} lakhs (₹{int(metrics['avg_daily_turnover_inr']):,})
+Thresholds: ₹12L PASS | ₹6-12L MARGINAL | <₹6L FAIL
+
+{metrics['details']}
+
+📊 ENHANCED ANALYSIS: Based on 90 days of 1-minute data
+"""
+        except Exception as e:
+            logger.warning("intraday_analysis_failed", ticker=ticker, error=str(e),
+                         msg="Falling back to daily data analysis")
+
+    # Fallback to daily data analysis (original logic)
     try:
-        # Use the robust fetcher for history
         hist = await market_data_fetcher.get_historical_prices(normalized_symbol, period="3mo")
-        
+
         if hist.empty:
             logger.warning("no_history_found", ticker=ticker)
             return f"""Liquidity Analysis for {ticker}:
 Status: FAIL - Insufficient Data
 Avg Daily Volume (3mo): N/A
-Avg Daily Turnover (USD): N/A
+Avg Daily Turnover (INR): N/A
 """
 
         # Calculate metrics
         avg_volume = hist['Volume'].mean()
         avg_close = hist['Close'].mean()
-        
-        # Calculate local turnover
-        # NOTE: For UK stocks (.L), prices are in Pence, so we must divide by 100 
-        # to get Pounds before converting to USD.
-        if normalized_symbol.endswith('.L'):
-            avg_turnover_local = avg_volume * (avg_close / 100.0)
-            logger.info("pence_adjustment_applied", ticker=ticker)
-        else:
-            avg_turnover_local = avg_volume * avg_close
-        
-        # Determine FX Rate based on suffix
-        suffix = 'US' # Default
-        if '.' in normalized_symbol:
-            suffix = normalized_symbol.split('.')[-1].upper()
-            
-        # Special handling: If no dot, but not US exchange (rare edge case for clean tickers)
-        # We assume US for clean tickers (e.g. AAPL) which aligns with 'US' default.
-        
-        if suffix in EXCHANGE_INFO:
-            currency, fx_rate = EXCHANGE_INFO[suffix]
-            logger.info("using_static_fx_rate", ticker=ticker, suffix=suffix, currency=currency, rate=fx_rate)
-        else:
-            # Fallback for unknown suffixes (assume 1.0 but flag it)
-            currency = "Unknown (Assumed USD)"
-            fx_rate = 1.0
-            logger.warning("unknown_currency_suffix", ticker=ticker, suffix=suffix, default="1.0")
 
-        avg_turnover_usd = avg_turnover_local * fx_rate
+        # Calculate turnover in INR (prices from yfinance are already in INR for Indian stocks)
+        avg_turnover_inr = avg_volume * avg_close
 
-        # Threshold: $500k USD daily turnover is a reasonable floor
-        threshold_usd = 500_000
-        status = "PASS" if avg_turnover_usd > threshold_usd else "FAIL"
+        # Determine exchange suffix
+        suffix = 'NS' if '.NS' in normalized_symbol else 'BO' if '.BO' in normalized_symbol else 'UNKNOWN'
+
+        # Indian market thresholds in INR (no USD conversion needed)
+        # ₹12 lakhs = good liquidity for small/mid caps
+        # ₹6 lakhs = marginal (max 3% position size)
+        # <₹6 lakhs = too illiquid (hard fail)
+        threshold_inr = 12_00_000  # ₹12 lakhs
+        marginal_threshold_inr = 6_00_000  # ₹6 lakhs
+
+        if avg_turnover_inr >= threshold_inr:
+            status = "PASS"
+            status_detail = "Good liquidity"
+        elif avg_turnover_inr >= marginal_threshold_inr:
+            status = "MARGINAL"
+            status_detail = "Acceptable liquidity (max 3% position size)"
+        else:
+            status = "FAIL"
+            status_detail = "Insufficient liquidity"
+
+        # Format in lakhs for readability (1 lakh = 100,000)
+        turnover_lakhs = avg_turnover_inr / 1_00_000
+
+        logger.info("liquidity_calculated", ticker=ticker, suffix=suffix,
+                   turnover_inr=avg_turnover_inr, status=status)
 
         return f"""Liquidity Analysis for {ticker}:
-Status: {status}
+Status: {status} - {status_detail}
 Avg Daily Volume (3mo): {int(avg_volume):,}
-Avg Daily Turnover (USD): ${int(avg_turnover_usd):,}
-Details: {currency} turnover converted at FX rate {fx_rate}
-Threshold: $500,000 USD daily
+Avg Daily Turnover: ₹{turnover_lakhs:.2f} lakhs (₹{int(avg_turnover_inr):,})
+Thresholds: ₹12L PASS | ₹6-12L MARGINAL | <₹6L FAIL
+Exchange: {suffix}
+
+ℹ️  BASIC ANALYSIS: Using daily data only
+   (Install intraday data for manipulation detection & institutional analysis)
 """
 
     except Exception as e:

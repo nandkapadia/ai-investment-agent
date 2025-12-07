@@ -23,6 +23,10 @@ from src.enhanced_sentiment_toolkit import get_multilingual_sentiment_search
 from src.liquidity_calculation_tool import calculate_liquidity_metrics
 from src.stocktwits_api import StockTwitsAPI
 from src.data.fetcher import fetcher as market_data_fetcher
+from src.data.moneycontrol_fetcher import get_moneycontrol_fetcher
+from src.data.screener_in_fetcher import get_screener_in_fetcher
+from src.data.trendlyne_fetcher import get_trendlyne_fetcher
+from src.data.nse_fii_dii_fetcher import get_nse_fii_dii_fetcher
 
 logger = structlog.get_logger(__name__)
 stocktwits_api = StockTwitsAPI()
@@ -130,11 +134,32 @@ async def get_financial_metrics(ticker: Annotated[str, "Stock ticker symbol"]) -
             return f"Data Unavailable: {data.get('error')}"
             
         current_price = _safe_float(data.get('currentPrice', data.get('regularMarketPrice', 0)))
-        # Sanity check for negative price (data corruption)
-        if current_price is not None and current_price < 0:
-            logger.warning(f"Negative price detected for {ticker}: {current_price}")
-            current_price = None
-            
+
+        # Sanity check for negative price (data corruption) with fallback recovery
+        if current_price is not None and current_price <= 0:
+            logger.warning(f"Invalid price detected for {ticker}: {current_price}, attempting recovery")
+            # Fallback chain: try alternate price fields
+            current_price = (
+                _safe_float(data.get('previousClose')) or
+                _safe_float(data.get('regularMarketPreviousClose')) or
+                _safe_float(data.get('open')) or
+                _safe_float(data.get('regularMarketOpen'))
+            )
+
+            # If all structured fields failed, try to get from recent history
+            if current_price is None or current_price <= 0:
+                try:
+                    logger.info(f"Attempting historical price fallback for {ticker}")
+                    hist = await market_data_fetcher.get_historical_prices(normalized_symbol, period="1d")
+                    if not hist.empty and 'Close' in hist.columns:
+                        current_price = float(hist['Close'].iloc[-1])
+                        logger.info(f"Recovered price from history for {ticker}: {current_price}")
+                except Exception as e:
+                    logger.error(f"Historical price fallback failed for {ticker}: {str(e)}")
+
+            if current_price and current_price > 0:
+                logger.info(f"Successfully recovered valid price for {ticker}: {current_price}")
+
         currency = data.get('currency', 'N/A')
         analyst_count = data.get('numberOfAnalystOpinions')
         
@@ -200,7 +225,8 @@ async def get_news(
     
     try:
         normalized_symbol = normalize_ticker(ticker)
-        ticker_obj = yf.Ticker(normalized_symbol)
+        # Create Ticker object in thread pool to avoid blocking event loop
+        ticker_obj = await asyncio.to_thread(yf.Ticker, normalized_symbol)
         company_name = await extract_company_name_async(ticker_obj)
         
         # Local Domain Mapping
@@ -329,7 +355,8 @@ async def get_fundamental_analysis(ticker: Annotated[str, "Stock ticker symbol"]
     try:
         # Get company name for potential fallback/surgical search
         normalized_symbol = normalize_ticker(ticker)
-        ticker_obj = yf.Ticker(normalized_symbol)
+        # Create Ticker object in thread pool to avoid blocking event loop
+        ticker_obj = await asyncio.to_thread(yf.Ticker, normalized_symbol)
         company_name = await extract_company_name_async(ticker_obj)
         
         # 1. Primary Search: Ticker-based (Most specific to the listing)
@@ -385,6 +412,497 @@ async def get_fundamental_analysis(ticker: Annotated[str, "Stock ticker symbol"]
     except Exception as e:
         return f"Error searching for fundamentals: {e}"
 
+
+# ===================================================================
+# INDIAN MARKET SPECIFIC TOOLS
+# ===================================================================
+
+@tool
+async def get_indian_analyst_consensus(ticker: Annotated[str, "Stock ticker symbol"]) -> str:
+    """
+    Get analyst recommendations and price targets from Indian sources.
+
+    Specifically designed for Indian stocks (.NS/.BO tickers).
+    Aggregates data from Moneycontrol.com including:
+    - Buy/Hold/Sell recommendations
+    - Price targets (min/max/average)
+    - Analyst count and consensus
+
+    Args:
+        ticker: Stock ticker (e.g., 'RELIANCE.NS', 'TCS.BO')
+
+    Returns:
+        Formatted string with analyst consensus data
+    """
+    logger.info("get_indian_analyst_consensus_called", ticker=ticker)
+
+    try:
+        mc_fetcher = get_moneycontrol_fetcher()
+        consensus = await mc_fetcher.get_analyst_consensus(ticker)
+
+        if not consensus or consensus.get('analysts_count', 0) == 0:
+            return f"""Indian Analyst Consensus for {ticker}:
+Status: No analyst coverage found
+
+This stock may not have significant coverage from Indian brokerages.
+Consider using fundamental analysis instead."""
+
+        # Format the output
+        result = f"""Indian Analyst Consensus for {ticker}:
+
+RECOMMENDATIONS:
+- Buy: {consensus['buy_count']} analysts
+- Hold: {consensus['hold_count']} analysts
+- Sell: {consensus['sell_count']} analysts
+- **Consensus: {consensus['consensus']}**
+
+PRICE TARGETS:"""
+
+        if consensus.get('price_target_avg'):
+            result += f"\n- Average Target: ₹{consensus['price_target_avg']:,.0f}"
+
+        if consensus.get('price_target_min') and consensus.get('price_target_max'):
+            result += f"\n- Target Range: ₹{consensus['price_target_min']:,.0f} - ₹{consensus['price_target_max']:,.0f}"
+
+        result += f"\n\nTotal Analysts Covering: {consensus['analysts_count']}"
+
+        if consensus.get('last_updated'):
+            result += f"\nLast Updated: {consensus['last_updated']}"
+
+        result += "\n\nSource: Moneycontrol.com"
+
+        logger.info("indian_analyst_consensus_fetched",
+                   ticker=ticker,
+                   consensus=consensus['consensus'],
+                   analysts=consensus['analysts_count'])
+
+        return result
+
+    except Exception as e:
+        logger.error("indian_analyst_consensus_error", ticker=ticker, error=str(e), exc_info=True)
+        return f"Error fetching Indian analyst consensus for {ticker}: {str(e)}"
+
+
+@tool
+async def get_indian_financial_history(ticker: Annotated[str, "Stock ticker symbol"]) -> str:
+    """
+    Get 10-year financial history for Indian stocks.
+
+    Fetches comprehensive historical data from Screener.in including:
+    - Revenue trends (10 years)
+    - Profit trends
+    - ROE (Return on Equity) history
+    - Debt/Equity ratio trends
+
+    Args:
+        ticker: Stock ticker (e.g., 'RELIANCE.NS')
+
+    Returns:
+        Formatted string with financial history
+    """
+    logger.info("get_indian_financial_history_called", ticker=ticker)
+
+    try:
+        screener_fetcher = get_screener_in_fetcher()
+        financials = await screener_fetcher.get_financial_history(ticker)
+
+        if not financials or not financials.get('years'):
+            return f"""Financial History for {ticker}:
+Status: No historical data found
+
+Unable to retrieve financial history from Screener.in.
+The stock may not be listed or data may be unavailable."""
+
+        result = f"""10-Year Financial History for {ticker}:
+
+YEARS COVERED: {', '.join(financials['years'][-5:])}... ({len(financials['years'])} years total)
+
+"""
+
+        # Revenue trend
+        if financials.get('revenue_history'):
+            rev_list = financials['revenue_history']
+            if len(rev_list) >= 2:
+                latest = rev_list[-1] if rev_list[-1] else 0
+                oldest = rev_list[0] if rev_list[0] else 0
+                cagr = ((latest / oldest) ** (1 / len(rev_list)) - 1) * 100 if oldest > 0 else 0
+                result += f"REVENUE TREND:\n- Latest: ₹{latest/10_000_000:.1f} Cr\n- CAGR: {cagr:.1f}%\n\n"
+
+        # Profit trend
+        if financials.get('profit_history'):
+            profit_list = financials['profit_history']
+            if len(profit_list) >= 2:
+                latest = profit_list[-1] if profit_list[-1] else 0
+                result += f"PROFIT TREND:\n- Latest: ₹{latest/10_000_000:.1f} Cr\n\n"
+
+        # ROE trend
+        if financials.get('roe_history'):
+            roe_list = financials['roe_history']
+            if roe_list:
+                avg_roe = sum(r for r in roe_list if r) / len([r for r in roe_list if r])
+                latest_roe = roe_list[-1] if roe_list[-1] else 0
+                result += f"ROE TREND:\n- Latest: {latest_roe:.1f}%\n- Average: {avg_roe:.1f}%\n\n"
+
+        # Debt/Equity trend
+        if financials.get('debt_to_equity_history'):
+            de_list = financials['debt_to_equity_history']
+            if de_list:
+                latest_de = de_list[-1] if de_list[-1] else 0
+                result += f"LEVERAGE TREND:\n- Latest D/E: {latest_de:.2f}\n\n"
+
+        result += "Source: Screener.in"
+
+        logger.info("indian_financial_history_fetched",
+                   ticker=ticker, years=len(financials['years']))
+
+        return result
+
+    except Exception as e:
+        logger.error("indian_financial_history_error", ticker=ticker, error=str(e), exc_info=True)
+        return f"Error fetching Indian financial history for {ticker}: {str(e)}"
+
+
+@tool
+async def get_latest_concall_summary(ticker: Annotated[str, "Stock ticker symbol"]) -> str:
+    """
+    Get summary of latest conference call for Indian stocks.
+
+    Extracts and summarizes quarterly conference call transcripts from Screener.in:
+    - Quarter and date
+    - Key participants (CEO, CFO, etc.)
+    - Management guidance
+    - Key discussion points
+
+    Args:
+        ticker: Stock ticker (e.g., 'RELIANCE.NS')
+
+    Returns:
+        Formatted string with concall summary
+    """
+    logger.info("get_latest_concall_summary_called", ticker=ticker)
+
+    try:
+        screener_fetcher = get_screener_in_fetcher()
+        concall = await screener_fetcher.get_latest_concall(ticker)
+
+        if not concall or not concall.get('transcript'):
+            return f"""Conference Call Summary for {ticker}:
+Status: No conference call transcript found
+
+No recent concall transcript available for this stock on Screener.in."""
+
+        result = f"""Latest Conference Call Summary - {ticker}:
+
+"""
+
+        if concall.get('quarter'):
+            result += f"Quarter: {concall['quarter']}\n"
+
+        if concall.get('date'):
+            result += f"Date: {concall['date']}\n"
+
+        result += "\n"
+
+        # Participants
+        if concall.get('participants'):
+            result += "KEY PARTICIPANTS:\n"
+            for participant in concall['participants'][:5]:  # Top 5
+                result += f"- {participant}\n"
+            result += "\n"
+
+        # Management guidance
+        if concall.get('management_guidance'):
+            result += "MANAGEMENT GUIDANCE:\n"
+            for key, value in concall['management_guidance'].items():
+                result += f"- {key.replace('_', ' ').title()}: {value}\n"
+            result += "\n"
+
+        # Key points
+        if concall.get('key_points'):
+            result += "KEY DISCUSSION POINTS:\n"
+            for i, point in enumerate(concall['key_points'][:5], 1):  # Top 5
+                result += f"{i}. {point}\n"
+            result += "\n"
+
+        # Transcript preview
+        if concall.get('transcript'):
+            transcript_preview = concall['transcript'][:500]
+            result += f"TRANSCRIPT PREVIEW:\n{transcript_preview}...\n\n"
+
+        result += "Source: Screener.in\n\nNote: For full analysis, consider management's tone and specific financial targets mentioned."
+
+        logger.info("concall_summary_fetched",
+                   ticker=ticker, quarter=concall.get('quarter'))
+
+        return result
+
+    except Exception as e:
+        logger.error("concall_summary_error", ticker=ticker, error=str(e), exc_info=True)
+        return f"Error fetching conference call summary for {ticker}: {str(e)}"
+
+
+@tool
+async def get_trendlyne_analysis(ticker: Annotated[str, "Stock ticker symbol"]) -> str:
+    """
+    Get comprehensive Trendlyne analysis for Indian stocks.
+
+    Fetches unique Indian market insights from Trendlyne.com:
+    - Ownership breakdown (Promoter/FII/DII/Public holdings)
+    - Pledged shares percentage (critical risk indicator)
+    - Trendlyne quality and health scores
+    - Peer comparison metrics
+    - Brokerage price target consensus
+
+    Args:
+        ticker: Stock ticker (e.g., 'RELIANCE.NS')
+
+    Returns:
+        Formatted string with Trendlyne analysis
+    """
+    logger.info("get_trendlyne_analysis_called", ticker=ticker)
+
+    try:
+        trendlyne_fetcher = get_trendlyne_fetcher()
+        analysis = await trendlyne_fetcher.get_comprehensive_analysis(ticker)
+
+        if not analysis:
+            return f"""Trendlyne Analysis for {ticker}:
+Status: No data available
+
+Unable to retrieve Trendlyne data for this stock.
+The stock may not be covered or data may be temporarily unavailable."""
+
+        result = f"""Trendlyne Comprehensive Analysis - {ticker}:
+
+"""
+
+        # Ownership breakdown
+        if analysis.get('promoter_holding') is not None:
+            result += "OWNERSHIP PATTERN:\n"
+            result += f"- Promoter Holding: {analysis['promoter_holding']:.2f}%\n"
+
+            if analysis.get('fii_holding') is not None:
+                result += f"- FII Holding: {analysis['fii_holding']:.2f}%\n"
+
+            if analysis.get('dii_holding') is not None:
+                result += f"- DII Holding: {analysis['dii_holding']:.2f}%\n"
+
+            if analysis.get('public_holding') is not None:
+                result += f"- Public Holding: {analysis['public_holding']:.2f}%\n"
+
+            # Critical: Pledged shares
+            if analysis.get('pledged_percentage') is not None:
+                pledge = analysis['pledged_percentage']
+                if pledge > 50:
+                    risk_level = "HIGH RISK"
+                elif pledge > 20:
+                    risk_level = "MODERATE RISK"
+                else:
+                    risk_level = "LOW RISK"
+
+                result += f"- **Pledged Shares: {pledge:.2f}% ({risk_level})**\n"
+
+            result += "\n"
+
+        # Quality scores
+        if analysis.get('trendlyne_rating') is not None:
+            result += "TRENDLYNE SCORES:\n"
+            result += f"- Overall Rating: {analysis['trendlyne_rating']:.1f}/10\n"
+
+            if analysis.get('financial_health') is not None:
+                result += f"- Financial Health: {analysis['financial_health']:.1f}/10\n"
+
+            if analysis.get('valuation_rating') is not None:
+                result += f"- Valuation: {analysis['valuation_rating']:.1f}/10\n"
+
+            if analysis.get('growth_rating') is not None:
+                result += f"- Growth: {analysis['growth_rating']:.1f}/10\n"
+
+            result += "\n"
+
+        # Price targets
+        if analysis.get('consensus_target') is not None:
+            result += "BROKERAGE PRICE TARGETS:\n"
+            result += f"- Consensus Target: ₹{analysis['consensus_target']:,.0f}\n"
+
+            if analysis.get('high_target') and analysis.get('low_target'):
+                result += f"- Target Range: ₹{analysis['low_target']:,.0f} - ₹{analysis['high_target']:,.0f}\n"
+
+            if analysis.get('num_brokerages'):
+                result += f"- Number of Brokerages: {analysis['num_brokerages']}\n"
+
+            if analysis.get('upside_percentage') is not None:
+                result += f"- Implied Upside: {analysis['upside_percentage']:.1f}%\n"
+
+            result += "\n"
+
+        # Peer comparison
+        if analysis.get('peers'):
+            result += "PEER COMPANIES:\n"
+            for peer in analysis['peers'][:5]:
+                result += f"- {peer}\n"
+
+            if analysis.get('sector_pe_avg'):
+                result += f"\nSector Avg P/E: {analysis['sector_pe_avg']:.1f}\n"
+
+            if analysis.get('sector_pb_avg'):
+                result += f"Sector Avg P/B: {analysis['sector_pb_avg']:.1f}\n"
+
+            result += "\n"
+
+        result += "Source: Trendlyne.com\n\n"
+        result += "Note: Trendlyne provides proprietary ratings based on comprehensive Indian market analysis."
+
+        logger.info("trendlyne_analysis_fetched", ticker=ticker)
+
+        return result
+
+    except Exception as e:
+        logger.error("trendlyne_analysis_error", ticker=ticker, error=str(e), exc_info=True)
+        return f"Error fetching Trendlyne analysis for {ticker}: {str(e)}"
+
+
+@tool
+async def get_indian_fii_dii_flows(
+    ticker: Annotated[str, "Stock ticker symbol"],
+    include_market_wide: Annotated[bool, "Include market-wide FII/DII flows"] = True
+) -> str:
+    """
+    Get FII/DII (Foreign/Domestic Institutional Investor) flow data for Indian stocks.
+
+    Fetches institutional activity data from NSE India:
+    - Market-wide FII/DII daily flows (gross purchase/sale, net position)
+    - Stock-specific bulk deals (transactions >0.5% equity)
+    - Institutional accumulation/distribution patterns
+
+    This is a CRITICAL alpha factor for Indian markets as institutional flows
+    often precede major price movements.
+
+    Args:
+        ticker: Stock ticker (e.g., 'RELIANCE.NS', 'TCS.BO')
+        include_market_wide: If True, includes overall market FII/DII flows for context
+
+    Returns:
+        Formatted string with FII/DII flow analysis
+    """
+    logger.info("get_indian_fii_dii_flows_called", ticker=ticker)
+
+    try:
+        nse_fetcher = get_nse_fii_dii_fetcher()
+
+        # Only process if it's an Indian stock
+        if not (ticker.endswith('.NS') or ticker.endswith('.BO')):
+            return f"""FII/DII Flow Analysis for {ticker}:
+Status: Not applicable (Indian stocks only)
+
+This tool is designed for NSE/BSE listed stocks (.NS/.BO suffixes).
+For non-Indian stocks, use standard institutional ownership data."""
+
+        result = f"""FII/DII Flow Analysis - {ticker}:
+
+"""
+
+        # Market-wide flows (provides macro context)
+        if include_market_wide:
+            async with nse_fetcher:
+                market_flows = await nse_fetcher.get_market_wide_flows()
+
+                if market_flows:
+                    result += "MARKET-WIDE INSTITUTIONAL FLOWS (Latest):\n"
+                    result += f"Date: {market_flows['date']}\n\n"
+
+                    result += "Foreign Institutional Investors (FII):\n"
+                    result += f"- Gross Purchase: ₹{market_flows['fii_gross_purchase']:,.0f} Cr\n"
+                    result += f"- Gross Sale: ₹{market_flows['fii_gross_sale']:,.0f} Cr\n"
+                    result += f"- **Net Flow: ₹{market_flows['fii_net']:,.0f} Cr**"
+
+                    if market_flows['fii_net'] > 0:
+                        result += " (BUYING)\n"
+                    elif market_flows['fii_net'] < 0:
+                        result += " (SELLING)\n"
+                    else:
+                        result += " (NEUTRAL)\n"
+
+                    result += "\nDomestic Institutional Investors (DII):\n"
+                    result += f"- Gross Purchase: ₹{market_flows['dii_gross_purchase']:,.0f} Cr\n"
+                    result += f"- Gross Sale: ₹{market_flows['dii_gross_sale']:,.0f} Cr\n"
+                    result += f"- **Net Flow: ₹{market_flows['dii_net']:,.0f} Cr**"
+
+                    if market_flows['dii_net'] > 0:
+                        result += " (BUYING)\n"
+                    elif market_flows['dii_net'] < 0:
+                        result += " (SELLING)\n"
+                    else:
+                        result += " (NEUTRAL)\n"
+
+                    result += f"\n**Combined Net Institutional Flow: ₹{market_flows['net_institutional_flow']:,.0f} Cr**\n\n"
+
+                    # Interpretation
+                    if market_flows['net_institutional_flow'] > 1000:
+                        result += "Market Context: STRONG institutional buying (bullish backdrop)\n\n"
+                    elif market_flows['net_institutional_flow'] > 0:
+                        result += "Market Context: Moderate institutional buying (positive backdrop)\n\n"
+                    elif market_flows['net_institutional_flow'] < -1000:
+                        result += "Market Context: STRONG institutional selling (bearish backdrop)\n\n"
+                    elif market_flows['net_institutional_flow'] < 0:
+                        result += "Market Context: Moderate institutional selling (negative backdrop)\n\n"
+                    else:
+                        result += "Market Context: Neutral institutional activity\n\n"
+                else:
+                    result += "Market-wide flows: Data unavailable\n\n"
+
+        # Stock-specific bulk deals
+        async with nse_fetcher:
+            bulk_deals = await nse_fetcher.get_bulk_deals(ticker)
+
+            if bulk_deals and len(bulk_deals) > 0:
+                result += f"STOCK-SPECIFIC BULK DEALS (Last 30 days):\n"
+                result += f"Found {len(bulk_deals)} bulk/block deal(s)\n\n"
+
+                for i, deal in enumerate(bulk_deals[:5], 1):  # Show top 5
+                    result += f"Deal #{i}:\n"
+
+                    if deal.get('date'):
+                        result += f"- Date: {deal['date']}\n"
+
+                    if deal.get('client_name'):
+                        result += f"- Client: {deal['client_name']}\n"
+
+                    if deal.get('deal_type'):
+                        result += f"- Type: {deal['deal_type']}\n"
+
+                    if deal.get('quantity'):
+                        result += f"- Quantity: {deal['quantity']:,} shares\n"
+
+                    if deal.get('price'):
+                        result += f"- Price: ₹{deal['price']:.2f}\n"
+
+                    result += "\n"
+
+                if len(bulk_deals) > 5:
+                    result += f"... and {len(bulk_deals) - 5} more deal(s)\n\n"
+
+                # Interpretation
+                result += "Bulk Deal Significance:\n"
+                result += "- Transactions >0.5% of equity indicate institutional activity\n"
+                result += "- Multiple deals may signal accumulation or distribution\n"
+                result += "- Check client names for known FII/DII/mutual funds\n\n"
+            else:
+                result += "STOCK-SPECIFIC BULK DEALS:\nNo bulk deals found in last 30 days\n\n"
+
+        result += "Source: NSE India\n\n"
+        result += "Note: FII/DII flows are a leading indicator in Indian markets. "
+        result += "Strong buying often precedes upward price movements and vice versa."
+
+        logger.info("indian_fii_dii_flows_fetched", ticker=ticker)
+
+        return result
+
+    except Exception as e:
+        logger.error("indian_fii_dii_flows_error", ticker=ticker, error=str(e), exc_info=True)
+        return f"Error fetching FII/DII flows for {ticker}: {str(e)}"
+
+
 class Toolkit:
     def __init__(self):
         self.market_data_fetcher = market_data_fetcher
@@ -397,19 +915,40 @@ class Toolkit:
         calculate_liquidity_metrics
     ]
     
-    def get_fundamental_tools(self): return [get_financial_metrics, get_news, get_fundamental_analysis] 
+    def get_fundamental_tools(self): return [
+        get_financial_metrics,
+        get_news,
+        get_fundamental_analysis,
+        get_indian_analyst_consensus,
+        get_indian_financial_history,
+        get_latest_concall_summary,
+        get_trendlyne_analysis,
+        get_indian_fii_dii_flows
+    ]
     def get_sentiment_tools(self): return [get_social_media_sentiment, get_multilingual_sentiment_search]
     def get_news_tools(self): return [get_news, get_macroeconomic_news]
+    def get_indian_tools(self): return [
+        get_indian_analyst_consensus,
+        get_indian_financial_history,
+        get_latest_concall_summary,
+        get_trendlyne_analysis,
+        get_indian_fii_dii_flows
+    ]
     def get_all_tools(self): return [
-        get_yfinance_data, 
-        get_technical_indicators, 
-        get_financial_metrics, 
-        get_news, 
-        get_social_media_sentiment, 
-        get_multilingual_sentiment_search, 
-        calculate_liquidity_metrics, 
-        get_macroeconomic_news, 
-        get_fundamental_analysis
+        get_yfinance_data,
+        get_technical_indicators,
+        get_financial_metrics,
+        get_news,
+        get_social_media_sentiment,
+        get_multilingual_sentiment_search,
+        calculate_liquidity_metrics,
+        get_macroeconomic_news,
+        get_fundamental_analysis,
+        get_indian_analyst_consensus,
+        get_indian_financial_history,
+        get_latest_concall_summary,
+        get_trendlyne_analysis,
+        get_indian_fii_dii_flows
     ]
 
 toolkit = Toolkit()
