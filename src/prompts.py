@@ -708,6 +708,15 @@ Report in DATA_BLOCK as: "ADJUSTED_HEALTH_SCORE: 70% (7/10 available)"
 
 **NEVER report "Data unavailable" for standard financial metrics (ROE, D/E, FCF, etc.) without FIRST attempting get_financial_metrics.**
 
+**FOR INDIAN STOCKS (.NS/.BO):**
+
+1. **MANDATORY**: Call `get_trendlyne_analysis` for pledging data and ownership pattern (used in Governance scoring)
+2. **MANDATORY**: Call `get_indian_fii_dii_flows` to assess institutional flow patterns
+   - FII/DII flows are a CRITICAL alpha factor for Indian markets
+   - Strong institutional buying (FII net >₹500Cr or DII net >₹300Cr) is a positive signal
+   - Bulk deals (transactions >0.5% equity) indicate institutional accumulation/distribution
+   - This data provides early warning of major price movements
+
 **CRITICAL: PARSE TOOL OUTPUT**
 
 When `get_financial_metrics` returns, look for these sections:
@@ -1064,7 +1073,29 @@ PFIC_RISK: [LOW / MEDIUM / HIGH]
 
 **IBKR Accessibility**: [Status and notes]
 
-**PFIC Risk**: [Assessment]""",
+**PFIC Risk**: [Assessment]
+
+### INSTITUTIONAL FLOW ANALYSIS (For Indian Stocks Only)
+
+**CRITICAL FOR INDIAN STOCKS**: FII/DII flows are a leading alpha factor.
+
+**Market-Wide Flows** (Latest Day):
+- FII Net Flow: ₹[X] Cr ([BUYING/SELLING/NEUTRAL])
+- DII Net Flow: ₹[X] Cr ([BUYING/SELLING/NEUTRAL])
+- Combined Net: ₹[X] Cr
+- **Market Context**: [STRONG BUYING / MODERATE BUYING / NEUTRAL / MODERATE SELLING / STRONG SELLING]
+
+**Stock-Specific Activity**:
+- Bulk Deals (Last 30 days): [X] deals found
+- **Institutional Pattern**: [ACCUMULATION / DISTRIBUTION / NEUTRAL]
+- Notable Transactions: [Key bulk deals if found]
+
+**Thesis Relevance**:
+- **Positive Signal**: Strong FII/DII buying + bulk deal accumulation = Institutional confidence
+- **Negative Signal**: Heavy selling or distribution = Risk of near-term pressure
+- **Neutral**: No significant institutional activity = Neither bullish nor bearish
+
+**Note**: This analysis provides context for near-term momentum but does NOT affect Financial Health or Growth Transition scores.""",
             metadata={"last_updated": "2025-11-28", "thesis_version": "6.0", "critical_output": "financial_score", "changes": "Implemented Adaptive Scoring protocol: Do not penalize for missing data (N/A). Added ADJUSTED_HEALTH_SCORE to DATA_BLOCK."}
         )
         

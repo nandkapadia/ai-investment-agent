@@ -26,6 +26,7 @@ from src.data.fetcher import fetcher as market_data_fetcher
 from src.data.moneycontrol_fetcher import get_moneycontrol_fetcher
 from src.data.screener_in_fetcher import get_screener_in_fetcher
 from src.data.trendlyne_fetcher import get_trendlyne_fetcher
+from src.data.nse_fii_dii_fetcher import get_nse_fii_dii_fetcher
 
 logger = structlog.get_logger(__name__)
 stocktwits_api = StockTwitsAPI()
@@ -761,6 +762,147 @@ The stock may not be covered or data may be temporarily unavailable."""
         return f"Error fetching Trendlyne analysis for {ticker}: {str(e)}"
 
 
+@tool
+async def get_indian_fii_dii_flows(
+    ticker: Annotated[str, "Stock ticker symbol"],
+    include_market_wide: Annotated[bool, "Include market-wide FII/DII flows"] = True
+) -> str:
+    """
+    Get FII/DII (Foreign/Domestic Institutional Investor) flow data for Indian stocks.
+
+    Fetches institutional activity data from NSE India:
+    - Market-wide FII/DII daily flows (gross purchase/sale, net position)
+    - Stock-specific bulk deals (transactions >0.5% equity)
+    - Institutional accumulation/distribution patterns
+
+    This is a CRITICAL alpha factor for Indian markets as institutional flows
+    often precede major price movements.
+
+    Args:
+        ticker: Stock ticker (e.g., 'RELIANCE.NS', 'TCS.BO')
+        include_market_wide: If True, includes overall market FII/DII flows for context
+
+    Returns:
+        Formatted string with FII/DII flow analysis
+    """
+    logger.info("get_indian_fii_dii_flows_called", ticker=ticker)
+
+    try:
+        nse_fetcher = get_nse_fii_dii_fetcher()
+
+        # Only process if it's an Indian stock
+        if not (ticker.endswith('.NS') or ticker.endswith('.BO')):
+            return f"""FII/DII Flow Analysis for {ticker}:
+Status: Not applicable (Indian stocks only)
+
+This tool is designed for NSE/BSE listed stocks (.NS/.BO suffixes).
+For non-Indian stocks, use standard institutional ownership data."""
+
+        result = f"""FII/DII Flow Analysis - {ticker}:
+
+"""
+
+        # Market-wide flows (provides macro context)
+        if include_market_wide:
+            async with nse_fetcher:
+                market_flows = await nse_fetcher.get_market_wide_flows()
+
+                if market_flows:
+                    result += "MARKET-WIDE INSTITUTIONAL FLOWS (Latest):\n"
+                    result += f"Date: {market_flows['date']}\n\n"
+
+                    result += "Foreign Institutional Investors (FII):\n"
+                    result += f"- Gross Purchase: ₹{market_flows['fii_gross_purchase']:,.0f} Cr\n"
+                    result += f"- Gross Sale: ₹{market_flows['fii_gross_sale']:,.0f} Cr\n"
+                    result += f"- **Net Flow: ₹{market_flows['fii_net']:,.0f} Cr**"
+
+                    if market_flows['fii_net'] > 0:
+                        result += " (BUYING)\n"
+                    elif market_flows['fii_net'] < 0:
+                        result += " (SELLING)\n"
+                    else:
+                        result += " (NEUTRAL)\n"
+
+                    result += "\nDomestic Institutional Investors (DII):\n"
+                    result += f"- Gross Purchase: ₹{market_flows['dii_gross_purchase']:,.0f} Cr\n"
+                    result += f"- Gross Sale: ₹{market_flows['dii_gross_sale']:,.0f} Cr\n"
+                    result += f"- **Net Flow: ₹{market_flows['dii_net']:,.0f} Cr**"
+
+                    if market_flows['dii_net'] > 0:
+                        result += " (BUYING)\n"
+                    elif market_flows['dii_net'] < 0:
+                        result += " (SELLING)\n"
+                    else:
+                        result += " (NEUTRAL)\n"
+
+                    result += f"\n**Combined Net Institutional Flow: ₹{market_flows['net_institutional_flow']:,.0f} Cr**\n\n"
+
+                    # Interpretation
+                    if market_flows['net_institutional_flow'] > 1000:
+                        result += "Market Context: STRONG institutional buying (bullish backdrop)\n\n"
+                    elif market_flows['net_institutional_flow'] > 0:
+                        result += "Market Context: Moderate institutional buying (positive backdrop)\n\n"
+                    elif market_flows['net_institutional_flow'] < -1000:
+                        result += "Market Context: STRONG institutional selling (bearish backdrop)\n\n"
+                    elif market_flows['net_institutional_flow'] < 0:
+                        result += "Market Context: Moderate institutional selling (negative backdrop)\n\n"
+                    else:
+                        result += "Market Context: Neutral institutional activity\n\n"
+                else:
+                    result += "Market-wide flows: Data unavailable\n\n"
+
+        # Stock-specific bulk deals
+        async with nse_fetcher:
+            bulk_deals = await nse_fetcher.get_bulk_deals(ticker)
+
+            if bulk_deals and len(bulk_deals) > 0:
+                result += f"STOCK-SPECIFIC BULK DEALS (Last 30 days):\n"
+                result += f"Found {len(bulk_deals)} bulk/block deal(s)\n\n"
+
+                for i, deal in enumerate(bulk_deals[:5], 1):  # Show top 5
+                    result += f"Deal #{i}:\n"
+
+                    if deal.get('date'):
+                        result += f"- Date: {deal['date']}\n"
+
+                    if deal.get('client_name'):
+                        result += f"- Client: {deal['client_name']}\n"
+
+                    if deal.get('deal_type'):
+                        result += f"- Type: {deal['deal_type']}\n"
+
+                    if deal.get('quantity'):
+                        result += f"- Quantity: {deal['quantity']:,} shares\n"
+
+                    if deal.get('price'):
+                        result += f"- Price: ₹{deal['price']:.2f}\n"
+
+                    result += "\n"
+
+                if len(bulk_deals) > 5:
+                    result += f"... and {len(bulk_deals) - 5} more deal(s)\n\n"
+
+                # Interpretation
+                result += "Bulk Deal Significance:\n"
+                result += "- Transactions >0.5% of equity indicate institutional activity\n"
+                result += "- Multiple deals may signal accumulation or distribution\n"
+                result += "- Check client names for known FII/DII/mutual funds\n\n"
+            else:
+                result += "STOCK-SPECIFIC BULK DEALS:\nNo bulk deals found in last 30 days\n\n"
+
+        result += "Source: NSE India\n\n"
+        result += "Note: FII/DII flows are a leading indicator in Indian markets. "
+        result += "Strong buying often precedes upward price movements and vice versa."
+
+        logger.info("indian_fii_dii_flows_fetched", ticker=ticker)
+
+        return result
+
+    except Exception as e:
+        logger.error("indian_fii_dii_flows_error", ticker=ticker, error=str(e), exc_info=True)
+        return f"Error fetching FII/DII flows for {ticker}: {str(e)}"
+
+
 class Toolkit:
     def __init__(self):
         self.market_data_fetcher = market_data_fetcher
@@ -780,7 +922,8 @@ class Toolkit:
         get_indian_analyst_consensus,
         get_indian_financial_history,
         get_latest_concall_summary,
-        get_trendlyne_analysis
+        get_trendlyne_analysis,
+        get_indian_fii_dii_flows
     ]
     def get_sentiment_tools(self): return [get_social_media_sentiment, get_multilingual_sentiment_search]
     def get_news_tools(self): return [get_news, get_macroeconomic_news]
@@ -788,7 +931,8 @@ class Toolkit:
         get_indian_analyst_consensus,
         get_indian_financial_history,
         get_latest_concall_summary,
-        get_trendlyne_analysis
+        get_trendlyne_analysis,
+        get_indian_fii_dii_flows
     ]
     def get_all_tools(self): return [
         get_yfinance_data,
@@ -803,7 +947,8 @@ class Toolkit:
         get_indian_analyst_consensus,
         get_indian_financial_history,
         get_latest_concall_summary,
-        get_trendlyne_analysis
+        get_trendlyne_analysis,
+        get_indian_fii_dii_flows
     ]
 
 toolkit = Toolkit()
